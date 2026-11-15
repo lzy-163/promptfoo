@@ -1,25 +1,19 @@
-import { getDefaultPort } from '../constants';
-import logger from '../logger';
-import { startServer } from '../server/server';
-import { setConfigDirectoryPath } from '../util/config/manage';
-import { setupEnv } from '../util/index';
-import { BrowserBehavior } from '../util/server';
 import type { Command } from 'commander';
+import telemetry from '../telemetry';
+import { setupEnv } from '../util';
+import { setConfigDirectoryPath } from '../util/config';
+import { BrowserBehavior, startServer } from '../web/server';
 
 export function viewCommand(program: Command) {
   program
     .command('view [directory]')
-    .description('Start browser UI')
-    .option(
-      '-p, --port <number>',
-      'Port number',
-      (val) => Number.parseInt(val, 10),
-      getDefaultPort(),
-    )
+    .description('Start browser ui')
+    .option('-p, --port <number>', 'Port number', '15500')
     .option('-y, --yes', 'Skip confirmation and auto-open the URL')
     .option('-n, --no', 'Skip confirmation and do not open the URL')
+    .option('--api-base-url <url>', 'Base URL for viewer API calls')
     .option('--filter-description <pattern>', 'Filter evals by description using a regex pattern')
-    .option('--env-file, --env-path <path>', 'Path to .env file')
+    .option('--env-file <path>', 'Path to .env file')
     .action(
       async (
         directory: string | undefined,
@@ -28,29 +22,32 @@ export function viewCommand(program: Command) {
           yes: boolean;
           no: boolean;
           apiBaseUrl?: string;
-          envPath?: string;
+          envFile?: string;
           filterDescription?: string;
         } & Command,
       ) => {
-        setupEnv(cmdObj.envPath);
-
-        if (cmdObj.filterDescription) {
-          logger.warn(
-            'The --filter-description option is deprecated and no longer supported. The argument will be ignored.',
-          );
-        }
+        setupEnv(cmdObj.envFile);
+        telemetry.maybeShowNotice();
+        telemetry.record('command_used', {
+          name: 'view',
+        });
+        await telemetry.send();
 
         if (directory) {
           setConfigDirectoryPath(directory);
         }
-        // Determine browser behavior
+        // Block indefinitely on server
         const browserBehavior = cmdObj.yes
           ? BrowserBehavior.OPEN
           : cmdObj.no
             ? BrowserBehavior.SKIP
             : BrowserBehavior.ASK;
-
-        await startServer(cmdObj.port, browserBehavior);
+        await startServer(
+          cmdObj.port,
+          cmdObj.apiBaseUrl,
+          browserBehavior,
+          cmdObj.filterDescription,
+        );
       },
     );
 }

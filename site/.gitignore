@@ -7,8 +7,6 @@
 # Generated files
 .docusaurus
 .cache-loader
-/static/docs
-/src/.generated-stats.json
 
 # Misc
 .DS_Store

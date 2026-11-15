@@ -1,21 +1,21 @@
----
-sidebar_label: Voyage AI
-description: 'Use Voyage AI text embedding models for semantic search, retrieval, and similarity assertions in Promptfoo.'
----
-
 # Voyage AI
 
-[Voyage AI](https://www.voyageai.com/) provides [text embeddings](https://docs.voyageai.com/docs/embeddings). Promptfoo calls its `/embeddings` endpoint for similarity assertions. Examples include `voyage-4-large`, `voyage-4`, `voyage-4-lite`, and `voyage-code-4`. The provider does not call Voyage's separate multimodal or contextualized embedding endpoints.
+[Voyage AI](https://www.voyageai.com/) is Anthropic's [recommended](https://docs.anthropic.com/en/docs/embeddings) embeddings provider. It supports [all models](https://docs.voyageai.com/docs/embeddings). As of time of writing:
+
+- voyage-large-2-instruct
+- voyage-finance-2
+- voyage-multilingual-2
+- voyage-law-2
+- voyage-code-2
+- voyage-large-2
+- voyage-2
 
 To use it, set the `VOYAGE_API_KEY` environment variable.
 
-To select it for one assertion:
+Use it like so:
 
 ```yaml
-assert:
-  - type: similar
-    value: The expected output
-    provider: voyage:voyage-4-large
+provider: voyage:voyage-2
 ```
 
 You can enable it for every similarity comparison using the `defaultTest` property:
@@ -24,22 +24,16 @@ You can enable it for every similarity comparison using the `defaultTest` proper
 defaultTest:
   options:
     provider:
-      embedding: voyage:voyage-4-large
+      embedding: voyage:voyage-2
 ```
 
 You can also override the API key or API base URL:
 
 ```yaml
-defaultTest:
-  options:
-    provider:
-      embedding:
-        id: voyage:voyage-4-large
-        config:
-          apiKeyEnvar: MY_VOYAGE_KEY
-          apiBaseUrl: https://api.voyageai.com/v1
-          headers:
-            X-Custom-Header: value
+provider:
+  id: voyage:voyage-2
+  config:
+    apiKey: XXX
+    apiKeyEnvar: VOYAGE_API_KEY # if set, will fetch API key from this environment variable
+    apiBaseUrl: https://api.voyageai.com/v1
 ```
-
-`apiBaseUrl` can also be set with the `VOYAGE_API_BASE_URL` environment variable.

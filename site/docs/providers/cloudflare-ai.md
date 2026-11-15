@@ -1,160 +1,52 @@
----
-sidebar_label: Cloudflare Workers AI
-description: Configure Cloudflare Workers AI chat and embedding models for evals with account-scoped authentication, exact model IDs, and OpenAI-compatible requests.
----
-
 # Cloudflare Workers AI
 
-This provider connects to Cloudflare Workers AI [text-generation and embedding models](https://developers.cloudflare.com/workers-ai/models/) through its OpenAI-compatible API.
+This provider supports the [models](https://developers.cloudflare.com/workers-ai/models/) provided by Cloudflare Workers AI, a serverless edge embedding and inference runtime.
 
 ## Required Configuration
 
-Set your Cloudflare account ID and API key as environment variables:
+Calling the Workers AI requires the user to supply a Cloudflare account ID and API key with sufficient permissions to invoke the Workers AI REST endpoints.
 
 ```sh
-export CLOUDFLARE_ACCOUNT_ID=your_account_id_here
-export CLOUDFLARE_API_KEY=your_api_key_here
+export CLOUDFLARE_ACCOUNT_ID=YOUR_ACCOUNT_ID_HERE
+export CLOUDFLARE_API_KEY=YOUR_API_KEY_HERE
 ```
 
-The Cloudflare account ID is not secret and can be included in your promptfoo configuration file. The API key is secret, so use environment variables instead of hardcoding it in config files.
+The Cloudflare account ID is not secret and therefore it is safe to put it in your `promptfoo` configuration file. The Cloudflare API key is secret, so while you can provide it in the config, this is **HIGHLY NOT RECOMMENDED** as it might lead to abuse. See below for an example safe configuration:
 
-```yaml title="promptfooconfig.yaml"
-# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+```yaml
 prompts:
-  - Tell me a funny joke about {{topic}}
+  - Tell me a really funny joke about {{topic}}. The joke should contain the word {{topic}}
 
 providers:
-  - id: cloudflare-ai:chat:@cf/openai/gpt-oss-120b
+  - id: cloudflare-ai:chat:@cf/meta/llama-3-8b-instruct
     config:
-      accountId: your_account_id_here
-      # API key is loaded from CLOUDFLARE_API_KEY environment variable
+      accountId: YOUR_ACCOUNT_ID_HERE
+      # It is not recommended to keep your API key on the config file since it is a secret value.
+      # Use the CLOUDFLARE_API_KEY environment variable or set the apiKeyEnvar value
+      # in the config
+      # apiKey: YOUR_API_KEY_HERE
+      # apiKeyEnvar: SOME_ENV_HAR_CONTAINING_THE_API_KEY
 
 tests:
   - vars:
-      topic: programming
+      topic: birds
     assert:
       - type: icontains
         value: '{{topic}}'
 ```
 
-### Alternative Environment Variable Names
+In addition to `apiKeyEnvar` allowed environment variable redirection for the `CLOUDFLARE_API_KEY` value, the `accountIdEnvar` can be used to similarly redirect to a value for the `CLOUDFLARE_ACCOUNT_ID`.
 
-Use custom environment variable names with `apiKeyEnvar` and `accountIdEnvar`:
+## Available Models and Model Parameters
 
-```yaml
-providers:
-  - id: cloudflare-ai:chat:@cf/qwen/qwen2.5-coder-32b-instruct
-    config:
-      accountId: your_account_id_here
-      apiKeyEnvar: CUSTOM_CLOUDFLARE_KEY
-      accountIdEnvar: CUSTOM_CLOUDFLARE_ACCOUNT
-```
+Cloudflare is constantly adding new models to its inventory. See their [official list of models](https://developers.cloudflare.com/workers-ai/models/) for a list of supported models. Different models support different parameters, which is supported by supplying those parameters as additional keys of the config object in the `promptfoo` config file.
 
-## OpenAI Compatibility
+For an example of how advanced embedding configuration should be supplied, see `examples/cloudflare-ai/embedding_configuration.yaml`
 
-Cloudflare documents these [OpenAI-compatible endpoints](https://developers.cloudflare.com/workers-ai/configuration/open-ai-compatibility/):
+For an example of how advanced completion/chat configuration should be supplied, see `examples/cloudflare-ai/chat_advanced_configuration.yaml`
 
-- **Chat completions**: `https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1/chat/completions`
-- **Embeddings**: `https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1/embeddings`
+Different models support different parameters. While this provider strives to be relatively flexible, it is possible that not all possible parameters have been added. If you need support for a parameter that is not yet supported, please open up a PR to add support.
 
-Supported parameters and capabilities vary by model. Check the model's Cloudflare documentation before configuring sampling options, tools, or multimodal inputs.
+## Future Improvements
 
-## Provider Types
-
-Use the `chat` or `embedding` provider type for the documented endpoints. The legacy `completion` type is described below.
-
-### Chat Completion
-
-For conversational AI and instruction-following models:
-
-```yaml
-providers:
-  - cloudflare-ai:chat:@cf/openai/gpt-oss-120b
-  - cloudflare-ai:chat:@cf/meta/llama-4-scout-17b-16e-instruct
-  - cloudflare-ai:chat:@cf/mistralai/mistral-small-3.1-24b-instruct
-```
-
-### Text Completion
-
-The legacy `cloudflare-ai:completion:<model>` selector sends requests to `/ai/v1/completions`. Cloudflare's current compatibility documentation does not establish support for this endpoint. Use a `cloudflare-ai:chat:<model>` selector for new text-generation configurations, including code generation.
-
-Phi-2 was deprecated on May 30, 2026 and should no longer be used for onboarding; see the [Workers AI model catalog](https://developers.cloudflare.com/workers-ai/models/) for currently supported models.
-
-### Embeddings
-
-For generating text embeddings:
-
-```yaml
-providers:
-  - cloudflare-ai:embedding:@cf/google/embeddinggemma-300m
-  - cloudflare-ai:embedding:@cf/baai/bge-large-en-v1.5
-```
-
-## Current Model Examples
-
-### Model Catalog {#state-of-the-art-models-2025}
-
-Check Cloudflare's [model catalog](https://developers.cloudflare.com/workers-ai/models/) for exact
-model IDs and supported endpoints. Features documented for the Responses API are not automatically
-available through `cloudflare-ai:chat:`.
-
-## Configuration Examples
-
-### Basic Chat Configuration
-
-```yaml
-providers:
-  - id: cloudflare-ai:chat:@cf/deepseek-ai/deepseek-r1-distill-qwen-32b
-    config:
-      accountId: your_account_id_here
-      temperature: 0.7
-      max_tokens: 1000
-```
-
-### Advanced Configuration with Multiple Models
-
-```yaml
-providers:
-  - id: cloudflare-ai:chat:@cf/meta/llama-4-scout-17b-16e-instruct
-    config:
-      accountId: your_account_id_here
-      temperature: 0.8
-      max_tokens: 500
-      top_p: 0.9
-      frequency_penalty: 0.1
-      presence_penalty: 0.1
-
-  - id: cloudflare-ai:chat:@cf/qwen/qwen2.5-coder-32b-instruct
-    config:
-      accountId: your_account_id_here
-      temperature: 0.2
-      max_tokens: 2000
-```
-
-### Embedding Configuration
-
-```yaml
-providers:
-  - id: cloudflare-ai:embedding:@cf/google/embeddinggemma-300m
-    config:
-      accountId: your_account_id_here
-```
-
-## Custom API Base URL
-
-Override the default API base URL for custom deployments or specific regions:
-
-```yaml
-providers:
-  - id: cloudflare-ai:chat:@cf/openai/gpt-oss-120b
-    config:
-      accountId: your_account_id_here
-      apiBaseUrl: https://api.cloudflare.com/client/v4/accounts/your_account_id/ai/v1
-```
-
-## See Also
-
-- [Cloudflare Workers AI Models](https://developers.cloudflare.com/workers-ai/models/) - Complete model catalog
-- [Cloudflare Workers AI OpenAI Compatibility](https://developers.cloudflare.com/workers-ai/configuration/open-ai-compatibility/) - OpenAI-compatible endpoints
-- [OpenAI Provider](./openai.md) - For comparison with OpenAI models
-- [Getting Started with Promptfoo](../getting-started.md) - Basic setup guide
+- [ ] Allow for the pass through of all generic configuration parameters for Cloudflare REST API

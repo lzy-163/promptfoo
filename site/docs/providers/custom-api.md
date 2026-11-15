@@ -1,46 +1,68 @@
 ---
-sidebar_label: Custom Javascript
-description: Configure custom JavaScript providers to integrate any API or service with promptfoo's testing framework using TypeScript, CommonJS, or ESM modules
+sidebar_position: 50
 ---
 
-# Javascript Provider
+# Custom Javascript
 
-Custom Javascript providers let you create providers in JavaScript or TypeScript to integrate with any API or service not already built into promptfoo.
+To create a custom API provider, implement the `ApiProvider` interface in a separate module. Here is the interface:
 
-## Supported File Formats and Examples
+```ts
+export interface CallApiContextParams {
+  vars: Record<string, string | object>;
+  // Used when provider is overridden on the test case.
+  originalProvider?: ApiProvider;
+}
 
-promptfoo supports multiple JavaScript module formats. Complete working examples are available on GitHub:
+export interface CallApiOptionsParams {
+  // Whether to include logprobs in API response (used with OpenAI providers)
+  includeLogProbs?: boolean;
+}
 
-- [CommonJS Provider](https://github.com/promptfoo/promptfoo/tree/main/examples/provider-custom/basic) - (`.js`, `.cjs`) - Uses `module.exports` and `require()`
-- [ESM Provider](https://github.com/promptfoo/promptfoo/tree/main/examples/provider-custom/mjs) - (`.mjs`, `.js` with `"type": "module"`) - Uses `import`/`export`
-- [TypeScript Provider](https://github.com/promptfoo/promptfoo/tree/main/examples/provider-custom/typescript) - (`.ts`) - Provides type safety with interfaces
-- [Embeddings Provider](https://github.com/promptfoo/promptfoo/tree/main/examples/provider-custom/embeddings) (commonjs)
+export interface ApiProvider {
+  constructor(options: { id?: string; config: Record<string, any> });
 
-## Provider Interface
+  // Unique identifier for the provider
+  id: () => string;
 
-At minimum, a custom provider must implement an `id` method and a `callApi` method.
+  // Text generation function
+  callApi: (
+    prompt: string,
+    context?: CallApiContextParams,
+    options?: CallApiOptionsParams,
+  ) => Promise<ProviderResponse>;
 
-```javascript title="echoProvider.mjs"
-// Save as echoProvider.mjs for ES6 syntax, or echoProvider.js for CommonJS
-export default class EchoProvider {
-  id = () => 'echo';
+  // Embedding function
+  callEmbeddingApi?: (prompt: string) => Promise<ProviderEmbeddingResponse>;
 
-  callApi = async (prompt, context, options) => {
-    return {
-      output: `Echo: ${prompt}`,
-    };
-  };
+  // Classification function
+  callClassificationApi?: (prompt: string) => Promise<ProviderClassificationResponse>;
+
+  // Shown on output UI
+  label?: ProviderLabel;
+
+  // Applied by the evaluator on provider response
+  transform?: string;
+
+  // Custom delay for the provider.
+  delay?: number;
 }
 ```
 
-You can optionally use a constructor to initialize the provider, for example:
+See also: [ProviderResponse](/docs/configuration/reference/#providerresponse)
 
-```javascript title="openaiProvider.js"
-const promptfoo = require('promptfoo').default;
+## Example
 
-module.exports = class OpenAIProvider {
+Here's an example of a custom API provider that returns a predefined output along with token usage:
+
+```javascript
+import fetch from 'node-fetch';
+
+class CustomApiProvider {
   constructor(options) {
-    this.providerId = options.id || 'openai-custom';
+    // Provider ID can be overridden by the config file (e.g. when using multiple of the same provider)
+    this.providerId = options.id || 'custom provider';
+
+    // options.config contains any custom options passed to the provider
     this.config = options.config;
   }
 
@@ -48,481 +70,131 @@ module.exports = class OpenAIProvider {
     return this.providerId;
   }
 
-  async callApi(prompt, context, options) {
-    const { data } = await promptfoo.cache.fetchWithCache(
-      'https://api.openai.com/v1/chat/completions',
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-        },
-        body: JSON.stringify({
-          model: this.config?.model || 'gpt-5-mini',
-          messages: [{ role: 'user', content: prompt }],
-          max_completion_tokens: this.config?.max_tokens || 1024,
-          temperature: this.config?.temperature || 1,
-        }),
-      },
-    );
+  async callApi(prompt, context) {
+    // Add your custom API logic here
+    // Use options like: `this.config.temperature`, `this.config.max_tokens`, etc.
+
+    console.log('Vars for this test case:', JSON.stringify(context.vars));
 
     return {
-      output: data.choices[0].message.content,
-      tokenUsage: data.usage,
-    };
-  }
-};
-```
+      // Required
+      output: 'Model output',
 
-`callApi` returns a `ProviderResponse` object. The `ProviderResponse` object format:
-
-```javascript
-{
-  // main response shown to users
-  output: "Model response - can be text or structured data",
-  error: "Error message if applicable",
-  prompt: "The actual prompt sent to the LLM", // Optional: reported prompt
-  tokenUsage: {
-    total: 100,
-    prompt: 50,
-    completion: 50,
-  },
-  cost: 0.002,
-  cached: false,
-  conversationEnded: false, // Optional: set true to stop multi-turn redteam gracefully
-  conversationEndReason: 'thread_closed', // Optional reason when conversationEnded=true
-  guardrails: { // Optional: normalized target guardrail decision
-    flagged: false,
-    flaggedInput: false,
-    flaggedOutput: false,
-  },
-  metadata: {}, // Additional data
-  ...
-}
-```
-
-Return an `error` for failed requests. Omitting `output` or returning `output: null` or `output: undefined` also produces an error, including in red team scans. The literal strings `"null"` and `"undefined"` are response content and are graded normally.
-
-### Looking up text-token prices
-
-Custom providers can import `getModelPricing` from `promptfoo` to look up the installed version's OpenAI or Anthropic catalog rates. Pass the provider name (`openai` or `anthropic`) and an exact model ID; unknown providers, unknown models, and models without catalog prices return `undefined`.
-
-```javascript
-import { getModelPricing } from 'promptfoo';
-
-const pricing = getModelPricing('anthropic', 'claude-3-haiku-20240307');
-const promptTokens = 1000;
-const completionTokens = 200;
-const rates =
-  pricing?.longContext && promptTokens > pricing.longContext.threshold
-    ? pricing.longContext
-    : pricing;
-const cost = rates ? rates.input * promptTokens + rates.output * completionTokens : undefined;
-// Include cost and tokenUsage in your ProviderResponse.
-```
-
-`input` and `output` are USD per text token. `longContext`, when present in the catalog, includes an input-token `threshold` and the rates above that threshold. The returned object is a copy. This is a catalog lookup, not a complete billing calculator: it does not fetch live prices or include cache discounts, service tiers, regional adjustments, tools, audio, or image charges. Prefer a provider-reported total when available.
-
-### Guardrail Responses
-
-To use [`guardrails` or `not-guardrails`](/docs/configuration/expected-outputs/guardrails), return `guardrails` beside `output`, not inside `output` or `metadata`. Set `flagged` explicitly; the directional fields only identify the stage that fired. Keep vendor-specific assessments and scores under `metadata`.
-
-Return expected policy blocks as a scorable `output`. If the guardrail itself failed, return `error` so Promptfoo cannot mistake the failure for a clean decision. See [Testing and Validating Guardrails](/docs/guides/testing-guardrails) for the full mapping pattern.
-
-### Context Parameter
-
-The `context` parameter provides test case information and utility objects:
-
-```javascript
-{
-  vars: {},              // Test case variables
-  prompt: {},            // Prompt template (raw, label, config)
-  test: {                // Full test case object
-    vars: {},
-    metadata: {
-      pluginId: '...',   // Redteam plugin (e.g. "promptfoo:redteam:harmful:hate")
-      strategyId: '...',  // Redteam strategy (e.g. "jailbreak", "jailbreak-templates")
-    },
-  },
-  originalProvider: {},  // Original provider when overridden
-  logger: {},            // Winston logger instance
-}
-```
-
-For redteam evals, use `context.test.metadata.pluginId` and `context.test.metadata.strategyId` to identify which plugin and strategy generated the test case.
-
-### Reporting the Actual Prompt
-
-If your provider dynamically generates or modifies prompts, you can report the actual prompt sent to the LLM using the `prompt` field in your response. This is useful for:
-
-- Frameworks like GenAIScript that generate prompts dynamically
-- Agent frameworks that build multi-turn conversations
-- Providers that add system instructions or modify the prompt
-
-```javascript title="dynamicPromptProvider.mjs"
-export default class DynamicPromptProvider {
-  id = () => 'dynamic-prompt';
-
-  callApi = async (prompt, context) => {
-    // Generate a different prompt dynamically
-    const generatedPrompt = `System: You are helpful.\nUser: ${prompt}`;
-
-    // Call the LLM with the generated prompt
-    const response = await callLLM(generatedPrompt);
-
-    return {
-      output: response,
-      prompt: generatedPrompt, // Report what was actually sent
-    };
-  };
-}
-```
-
-The reported prompt is used for:
-
-- **Display**: Shown as "Actual Prompt Sent" in the web UI
-- **Assertions**: Prompt-based assertions like `moderation` check this value
-- **Debugging**: Helps understand what was actually sent to the LLM
-
-See the [vercel-ai-sdk example](https://github.com/promptfoo/promptfoo/tree/main/examples/integration-vercel/ai-sdk) for a complete working example.
-
-### Two-Stage Provider
-
-```javascript title="twoStageProvider.js"
-const promptfoo = require('promptfoo').default;
-
-module.exports = class TwoStageProvider {
-  constructor(options) {
-    this.providerId = options.id || 'two-stage';
-    this.config = options.config;
-  }
-
-  id() {
-    return this.providerId;
-  }
-
-  async callApi(prompt) {
-    // First stage: fetch additional data
-    const secretData = await this.fetchSecret(this.config.secretKey);
-
-    // Second stage: call LLM with enriched prompt
-    const enrichedPrompt = `${prompt}\nContext: ${secretData}`;
-    const llmResponse = await this.callLLM(enrichedPrompt);
-
-    return {
-      output: llmResponse.output,
-      metadata: { secretUsed: true },
-    };
-  }
-
-  async fetchSecret(key) {
-    // Fetch some external data needed for processing
-    return `Secret information for ${key}`;
-  }
-
-  async callLLM(prompt) {
-    const { data } = await promptfoo.cache.fetchWithCache(
-      'https://api.openai.com/v1/chat/completions',
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-        },
-        body: JSON.stringify({
-          model: 'gpt-5-mini',
-          messages: [{ role: 'user', content: prompt }],
-        }),
-      },
-    );
-
-    return {
-      output: data.choices[0].message.content,
-    };
-  }
-};
-```
-
-### TypeScript Implementation
-
-```typescript title="typedProvider.ts"
-import promptfoo from 'promptfoo';
-import type {
-  ApiProvider,
-  ProviderOptions,
-  ProviderResponse,
-  CallApiContextParams,
-} from 'promptfoo';
-
-export default class TypedProvider implements ApiProvider {
-  protected providerId: string;
-  public config: Record<string, any>;
-
-  constructor(options: ProviderOptions) {
-    this.providerId = options.id || 'typed-provider';
-    this.config = options.config || {};
-  }
-
-  id(): string {
-    return this.providerId;
-  }
-
-  async callApi(prompt: string, context?: CallApiContextParams): Promise<ProviderResponse> {
-    const username = (context?.vars?.username as string) || 'anonymous';
-
-    return {
-      output: `Hello, ${username}! You said: "${prompt}"`,
+      // Optional
       tokenUsage: {
-        total: prompt.length,
-        prompt: prompt.length,
-        completion: 0,
+        total: 10,
+        prompt: 5,
+        completion: 5,
       },
     };
   }
 }
+
+module.exports = CustomApiProvider;
 ```
 
-### TypeScript Providers in Frontend Projects
-
-Promptfoo loads TypeScript providers in Node.js, not through your frontend bundler. If your provider imports app code from a Vite, Next.js, or Webpack project, make sure the imports are also valid from Node.
-
-For path aliases such as `@/utils`, define the alias in `tsconfig.json`:
-
-```json
-{
-  "compilerOptions": {
-    "paths": {
-      "@/*": ["./src/*"]
-    }
-  }
-}
-```
-
-Run `promptfoo eval` from the project root so the TypeScript loader can find that `tsconfig.json`.
-
-If your provider depends on bundler-only aliases, browser-only globals, CSS imports, or frontend plugins, compile or bundle the provider to JavaScript first and reference the built file:
-
-```yaml
-providers:
-  - file://dist/promptfoo-provider.js
-```
-
-## Additional Capabilities
-
-### Embeddings API
-
-To stop embedding grading when an eval is cancelled, set `supportsEmbeddingCancellation` to `true` and pass the third argument's `abortSignal` to your request. Without this flag, promptfoo calls `callEmbeddingApi` with only the input.
+Custom API providers can also be used for embeddings or classification.
 
 ```javascript
-supportsEmbeddingCancellation = true;
+module.exports = class CustomApiProvider {
+  constructor(options) {
+    this.providerId = options.id || 'custom provider';
+    this.config = options.config;
+  }
 
-async callEmbeddingApi(text, _context, { abortSignal } = {}) {
-  const response = await fetch('https://api.openai.com/v1/embeddings', {
+  id() {
+    return this.providerId;
+  }
+
+  // or embeddings:
+  async callEmbeddingApi(prompt) {
+    // Add your custom embedding logic here
+    return {
+      embedding: [], // Your embedding array
+      tokenUsage: { total: 10, prompt: 1, completion: 0 },
+    };
+  }
+  // or classification
+  async callClassificationApi(prompt) {
+    // Add your custom classification logic here
+    return {
+      classification: {
+        classA: 0.6,
+        classB: 0.4,
+      },
+    };
+  }
+};
+```
+
+### Caching
+
+You can interact with promptfoo's cache by importing the `promptfoo.cache` module. For example:
+
+```js
+const promptfoo = require('../../dist/src/index.js').default;
+
+const cache = promptfoo.cache.getCache();
+await cache.set('foo', 'bar');
+console.log(await cache.get('foo')); // "bar"
+```
+
+The cache is managed by [`cache-manager`](https://www.npmjs.com/package/cache-manager/v/4.1.0).
+
+promptfoo also has built-in utility functions for fetching with cache and timeout:
+
+```js
+const { data, cached } = await promptfoo.cache.fetchWithCache(
+  'https://api.openai.com/v1/chat/completions',
+  {
     method: 'POST',
-    signal: abortSignal,
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
     },
-    body: JSON.stringify({
-      model: 'text-embedding-3-small',
-      input: text,
-    }),
-  });
-
-  const data = await response.json();
-
-  return {
-    embedding: data.data[0].embedding,
-    tokenUsage: {
-      total: data.usage.total_tokens,
-      prompt: data.usage.prompt_tokens,
-      completion: 0,
-    },
-  };
-}
-```
-
-### Classification API
-
-```javascript title="classificationProvider.js"
-async callClassificationApi(text) {
-  return {
-    classification: {
-      positive: 0.75,
-      neutral: 0.20,
-      negative: 0.05,
-    },
-  };
-}
-```
-
-### Handling Multimodal Content
-
-Custom providers handle multimodal content the same way whether the media comes from a standard eval or a red team strategy: read the media variable from `context.vars` and translate it into the target API's expected payload shape.
-
-For standard evals, provide the media value through `tests[].vars`, `defaultTest.vars`, a dataset column, or a dynamic variable:
-
-```yaml
-prompts:
-  - '{{image}} {{question}}'
-
-tests:
-  - vars:
-      image: 'data:image/png;base64,iVBORw0KGgo...'
-      question: Describe this image.
-```
-
-In this case, `context.vars.image` contains the configured value. It may be raw base64, a `data:` URL, an external URL, or another representation your provider knows how to forward.
-
-For red team runs, [image](/docs/red-team/strategies/image), [audio](/docs/red-team/strategies/audio), and [video](/docs/red-team/strategies/video) strategies generate media and store it in the template variable named by `redteam.injectVar`. The rendered `prompt` also contains the media value, but `context.vars` is safer because it preserves variable boundaries and avoids parsing a very long prompt.
-
-| Red team strategy | `context.vars[redteam.injectVar]`                        | Extra context                                                   | Forwarding notes                                                                                                                                                                                                                   |
-| ----------------- | -------------------------------------------------------- | --------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `image`           | Raw PNG base64, no `data:` prefix                        | `context.vars.image_text`, `context.test.metadata.originalText` | Wrap as `data:image/png;base64,...` for APIs that expect data URLs.                                                                                                                                                                |
-| `audio`           | Raw MP3 base64 from remote generation, no `data:` prefix | `context.test.metadata.originalText`                            | Requires remote generation. Forward with MIME type `audio/mpeg` or your provider's equivalent audio format.                                                                                                                        |
-| `video`           | Raw MP4 base64 when local FFmpeg generation succeeds     | `context.vars.video_text`, `context.test.metadata.originalText` | Install FFmpeg and set `PROMPTFOO_DISABLE_REMOTE_GENERATION=true` or `PROMPTFOO_DISABLE_REDTEAM_REMOTE_GENERATION=true` for real MP4 bytes. If generation falls back, the value may decode to the original text instead of an MP4. |
-
-Audio and video have opposite generation requirements: audio requires remote generation, while real MP4 video requires the local FFmpeg path. Run separate scans if you need to verify both remote audio and local MP4 handling.
-
-```javascript title="multimodalProvider.js"
-module.exports = class MultimodalProvider {
-  id() {
-    return 'multimodal-provider';
-  }
-
-  async callApi(prompt, context) {
-    const apiKey = process.env.OPENAI_API_KEY;
-    if (!apiKey) {
-      return { error: 'OPENAI_API_KEY is required' };
-    }
-
-    const imageBase64 = context.vars.image || '';
-    const question = context.vars.question || 'Describe this image';
-
-    // Red team image runs provide raw PNG base64. Eval vars may already provide a URL.
-    const imageUrl = /^(data:|https?:\/\/)/.test(imageBase64)
-      ? imageBase64
-      : `data:image/png;base64,${imageBase64}`;
-
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: 'gpt-5',
-        messages: [
-          {
-            role: 'user',
-            content: [
-              { type: 'image_url', image_url: { url: imageUrl } },
-              { type: 'text', text: question },
-            ],
-          },
-        ],
-      }),
-    });
-
-    if (!response.ok) {
-      return { error: `OpenAI API error ${response.status}: ${await response.text()}` };
-    }
-
-    const result = await response.json();
-    const output = result.choices?.[0]?.message?.content;
-    return output
-      ? { output }
-      : { error: `OpenAI API returned no output: ${JSON.stringify(result)}` };
-  }
-};
-```
-
-:::note
-
-`injectVar` defaults to the **last** template variable in your prompt. With `{{image}} {{question}}`, it defaults to `question` — not `image`. Always set `injectVar` explicitly when using media strategies.
-
-:::
-
-Avoid logging full media strings; screenshots, audio, and video can be large or sensitive. For debugging, log length, detected MIME type, a hash, or the first few bytes after decoding instead of the full base64 payload.
-
-See the [Python provider multimodal docs](/docs/providers/python#handling-multimodal-content) for a Python example.
-
-## Cache System
-
-The built-in caching system helps avoid redundant API calls:
-
-```javascript title="cacheExample.js"
-// Get the cache instance
-const cache = promptfoo.cache.getCache();
-
-// Store and retrieve data
-await cache.set('my-key', 'cached-value', { ttl: 3600 }); // TTL in seconds
-const value = await cache.get('my-key');
-
-// Fetch with cache wrapper
-const { data, cached } = await promptfoo.cache.fetchWithCache(
-  'https://api.example.com/endpoint',
-  {
-    method: 'POST',
-    body: JSON.stringify({ query: 'data' }),
+    body: JSON.stringify(body),
   },
-  5000, // timeout in ms
+  10_000, // 10 second timeout
 );
+
+console.log('Got from OpenAI:', data);
+console.log('Was it cached?', cached);
 ```
 
-## Configuration
+## Using the provider
 
-### Provider Configuration
+Include the custom provider in promptfoo config:
+
+```yaml
+providers: ['file://relative/path/to/customApiProvider.js']
+```
+
+Alternatively, you can pass the path to the custom API provider directly in the CLI:
+
+```
+promptfoo eval -p prompt1.txt prompt2.txt -o results.csv -v vars.csv -r ./customApiProvider.js
+```
+
+This command will evaluate the prompts using the custom API provider and save the results to the specified CSV file.
+
+Full working examples of a [custom provider](https://github.com/promptfoo/promptfoo/tree/main/examples/custom-provider) and [custom provider embeddings](https://github.com/promptfoo/promptfoo/tree/main/examples/custom-provider-embeddings) are available in the [examples directory](https://github.com/promptfoo/promptfoo/tree/main/examples).
+
+## Multiple instances of the same provider
+
+You can instantiate multiple providers of the same type with distinct IDs. In this example, we pass a different temperature config to the provider:
 
 ```yaml
 providers:
-  - id: file://./myProvider.mjs # ES6 modules
-    label: 'My Custom API' # Display name in UI
+  - id: file:///absolute/path/to/customProvider.js
+    label: custom-provider-hightemp
     config:
-      model: 'gpt-5'
-      temperature: 0.7
-      max_tokens: 2000
-      custom_parameter: 'custom value'
-  # - id: file://./myProvider.js   # CommonJS modules
+      temperature: 1.0
+  - id: file:///absolute/path/to/customProvider.js
+    label: custom-provider-lowtemp
+    config:
+      temperature: 0
 ```
 
-### Link to Cloud Target
+### ES modules
 
-:::info Promptfoo Cloud Feature
-Available in [Promptfoo Cloud](/docs/enterprise) deployments.
-:::
-
-Link your local provider configuration to a cloud target using `linkedTargetId`:
-
-```yaml
-providers:
-  - id: file://./myProvider.mjs
-    config:
-      linkedTargetId: 'promptfoo://provider/12345678-1234-1234-1234-123456789abc'
-```
-
-See [Linking Local Targets to Cloud](/docs/red-team/troubleshooting/linking-targets/) for setup instructions.
-
-### Multiple Instances
-
-```yaml title="multiple-providers.yaml"
-providers:
-  - id: file:///path/to/provider.js
-    label: high-temperature
-    config:
-      temperature: 0.9
-  - id: file:///path/to/provider.js
-    label: low-temperature
-    config:
-      temperature: 0.1
-```
-
-## See Also
-
-- [Browser Provider](/docs/providers/browser/)
-- [Custom Provider Examples](https://github.com/promptfoo/promptfoo/tree/main/examples)
-- [Custom Script Provider](/docs/providers/custom-script/)
-- [Go Provider](/docs/providers/go/)
-- [HTTP Provider](/docs/providers/http/)
-- [Python Provider](/docs/providers/python/)
+ES modules are supported, but must have a `.mjs` file extension. Alternatively, if you are transpiling Javascript or Typescript, we recommend pointing promptfoo to the transpiled plain Javascript output.

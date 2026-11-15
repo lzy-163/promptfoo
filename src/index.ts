@@ -1,84 +1,130 @@
-import assertions from './assertions/index';
+import invariant from 'tiny-invariant';
+import assertions from './assertions';
 import * as cache from './cache';
-import guardrails from './guardrails';
-import { evaluate } from './node';
-import { loadApiProvider, loadApiProviders } from './providers/index';
-import { getModelPricing } from './providers/pricing';
-import { doGenerateRedteam } from './redteam/commands/generate';
-import { extractEntities } from './redteam/extraction/entities';
-import { extractMcpToolsInfo } from './redteam/extraction/mcpTools';
-import { extractSystemPurpose } from './redteam/extraction/purpose';
-import { GRADERS } from './redteam/graders';
-import { RedteamGraderBase, RedteamPluginBase } from './redteam/plugins/base';
-import { Plugins } from './redteam/plugins/index';
-import { doRedteamRun } from './redteam/shared';
-import { Strategies } from './redteam/strategies/index';
+import { evaluate as doEvaluate } from './evaluator';
+import { readPrompts } from './prompts';
+import providers, { loadApiProvider } from './providers';
+import { loadApiProviders } from './providers';
+import telemetry from './telemetry';
+import { readTests } from './testCases';
+import type {
+  EvaluateOptions,
+  TestSuite,
+  EvaluateTestSuite,
+  ProviderOptions,
+  PromptFunction,
+} from './types';
+import {
+  readFilters,
+  writeResultsToDatabase,
+  writeMultipleOutputs,
+  writeOutput,
+  migrateResultsFromFileSystemToDatabase,
+} from './util';
 
-import type { RedteamRunOptions } from './redteam/types';
+export * from './types';
 
-export { EvalRunError, PromptSuggestionsRejectedError } from './evaluator/errors';
-export { EmailValidationError } from './globalConfig/accounts';
-export { ServerError, type ServerErrorPhase } from './server/errors';
 export { generateTable } from './table';
-// EVENT_SOURCES, EventSource, EventSourceSchema, isCliEventSource flow through ./types/index.
-export * from './types/index';
-// Transform types and runtime guard for users passing inline transform functions
-// via the Node.js package.
-export { isTransformFunction } from './types/transform';
-export { ConfigResolutionError } from './util/config/load';
 
-// Extension hook context types for users writing custom extensions
-export type {
-  AfterAllExtensionHookContext,
-  AfterEachExtensionHookContext,
-  BeforeAllExtensionHookContext,
-  BeforeEachExtensionHookContext,
-  ExtensionHookContextMap,
-} from './evaluatorHelpers';
-export type { ModelPricing } from './providers/pricing';
-export type { TransformContext, TransformFunction, TransformPrompt } from './types/transform';
+async function evaluate(testSuite: EvaluateTestSuite, options: EvaluateOptions = {}) {
+  const constructedTestSuite: TestSuite = {
+    ...testSuite,
+    providers: await loadApiProviders(testSuite.providers, {
+      env: testSuite.env,
+    }),
+    tests: await readTests(testSuite.tests),
 
-type LibraryRedteamRunOptions = Omit<RedteamRunOptions, 'eventSource'>;
+    nunjucksFilters: await readFilters(testSuite.nunjucksFilters || {}),
 
-async function runRedteam(options: LibraryRedteamRunOptions = {}) {
-  return doRedteamRun({ ...options, eventSource: 'library' });
+    // Full prompts expected (not filepaths)
+    prompts: (
+      await Promise.all(
+        testSuite.prompts.map(async (promptInput) => {
+          if (typeof promptInput === 'function') {
+            return {
+              raw: promptInput.toString(),
+              label: promptInput.toString(),
+              function: promptInput as PromptFunction,
+            };
+          } else if (typeof promptInput === 'string') {
+            const prompts = await readPrompts(promptInput);
+            return prompts.map((p) => ({
+              raw: p.raw,
+              label: p.label,
+            }));
+          } else {
+            return {
+              raw: JSON.stringify(promptInput),
+              label: JSON.stringify(promptInput),
+            };
+          }
+        }),
+      )
+    ).flat(),
+  };
+
+  // Resolve nested providers
+  for (const test of constructedTestSuite.tests || []) {
+    if (test.options?.provider && typeof test.options.provider === 'function') {
+      test.options.provider = await loadApiProvider(test.options.provider);
+    }
+    if (test.assert) {
+      for (const assertion of test.assert) {
+        if (assertion.type === 'assert-set' || typeof assertion.provider === 'function') {
+          continue;
+        }
+
+        if (assertion.provider) {
+          if (typeof assertion.provider === 'object') {
+            const casted = assertion.provider as ProviderOptions;
+            invariant(casted.id, 'Provider object must have an id');
+            assertion.provider = await loadApiProvider(casted.id, { options: casted });
+          } else if (typeof assertion.provider === 'string') {
+            assertion.provider = await loadApiProvider(assertion.provider);
+          } else {
+            throw new Error('Invalid provider type');
+          }
+        }
+      }
+    }
+  }
+
+  // Other settings
+  if (options.cache === false || (options.repeat && options.repeat > 1)) {
+    cache.disableCache();
+  }
+  telemetry.maybeShowNotice();
+
+  // Run the eval!
+  const ret = await doEvaluate(constructedTestSuite, {
+    eventSource: 'library',
+    ...options,
+  });
+
+  const unifiedConfig = { ...testSuite, prompts: constructedTestSuite.prompts };
+  let evalId: string | null = null;
+  if (testSuite.writeLatestResults) {
+    await migrateResultsFromFileSystemToDatabase();
+    evalId = await writeResultsToDatabase(ret, unifiedConfig);
+  }
+
+  if (testSuite.outputPath) {
+    if (typeof testSuite.outputPath === 'string') {
+      await writeOutput(testSuite.outputPath, evalId, ret, unifiedConfig, null);
+    } else if (Array.isArray(testSuite.outputPath)) {
+      await writeMultipleOutputs(testSuite.outputPath, evalId, ret, unifiedConfig, null);
+    }
+  }
+
+  await telemetry.send();
+  return ret;
 }
 
-const redteam = {
-  Extractors: {
-    extractEntities,
-    extractMcpToolsInfo,
-    extractSystemPurpose,
-  },
-  Graders: GRADERS,
-  Plugins,
-  Strategies,
-  Base: {
-    Plugin: RedteamPluginBase,
-    Grader: RedteamGraderBase,
-  },
-  generate: doGenerateRedteam,
-  run: runRedteam,
-};
-
-export {
-  assertions,
-  cache,
-  evaluate,
-  getModelPricing,
-  guardrails,
-  loadApiProvider,
-  loadApiProviders,
-  redteam,
-};
+export { evaluate, assertions, providers };
 
 export default {
-  assertions,
-  cache,
   evaluate,
-  getModelPricing,
-  guardrails,
-  loadApiProvider,
-  loadApiProviders,
-  redteam,
+  assertions,
+  providers,
+  cache,
 };

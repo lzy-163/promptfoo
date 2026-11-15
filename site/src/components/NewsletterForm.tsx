@@ -1,5 +1,4 @@
 import React, { useEffect } from 'react';
-
 import styles from './NewsletterForm.module.css';
 
 const NewsletterForm: React.FC = () => {

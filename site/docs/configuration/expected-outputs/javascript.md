@@ -1,24 +1,11 @@
 ---
 sidebar_position: 50
 sidebar_label: Javascript
-description: Build sophisticated JavaScript validators for LLM outputs with async operations, scoring logic, and comprehensive error handling
 ---
 
 # Javascript assertions
 
 The `javascript` [assertion](/docs/configuration/expected-outputs) allows you to provide a custom JavaScript function to validate the LLM output.
-
-## Restrict inline assertions and transforms
-
-Use `promptfoo eval --safe-mode` or `PROMPTFOO_SAFE_MODE=true` to reject string-based JavaScript assertions and inline expressions handled by the shared transform helper. You can also set `commandLineOptions.safeMode: true` in the eval configuration. Config settings cannot disable a guard enabled by the CLI flag or process environment.
-
-Move these expressions into reviewed `file://` scripts when using this mode. JavaScript function values passed through the Node API remain supported. Rejected assertions fail with an explanatory reason; rejected transforms produce an error.
-
-:::warning Limited execution guard
-
-This option is not a sandbox and does not make untrusted configurations safe to run. File callbacks, programmatic functions, executable providers, config modules, Python/Ruby assertions, HTTP session parsers, and HTTP status validators can still execute code. Only run configurations and referenced files that you trust, or use an independently isolated environment with appropriate credentials and network controls.
-
-:::
 
 A variable named `output` is injected into the context. The function should return `true` if the output passes the assertion, and `false` otherwise. If the function returns a number, it will be treated as a score.
 
@@ -31,10 +18,6 @@ assert:
 ```
 
 In the example above, the `javascript` assertion checks if the output includes the string "Hello, World!". If it does, the assertion passes and a score of 1 is recorded. If it doesn't, the assertion fails and a score of 0 is returned.
-
-Single-line assertions may begin with `const`, `let`, or `var` declarations; the final expression is returned automatically. Semicolons and quotes inside `/* ... */` or trailing `// ...` comments do not affect that expression. For example, `const n = output.length; /* characters; not words */ n > 5` returns whether the output has more than five characters. Optional chaining also works with keyword-named properties, such as `const data = JSON.parse(output); data?.default / 2 === 2`. Async functions can use regular expressions after `await`, for example `const check = async () => await /[a-z]+/.test(output); check()`. Generator functions and methods, including async generators, can also use regular expressions after `yield`: `const check = async function* () { yield /[a-z]+/.test(output); }; check().next().then(result => result.value)`.
-
-For longer assertions, use [multiline functions](#multiline-functions) with an explicit `return`.
 
 If you want to return a custom score, your function should return a number. For example:
 
@@ -65,15 +48,13 @@ assert:
 
 ## Handling objects
 
-For string expressions and `file://` scripts, `output` keeps its type after any provider, test, or assertion [transforms](/docs/configuration/guide#transforming-outputs). If it is an object or array (such as tool/function calls), access it directly:
+If the LLM outputs a JSON object (such as in the case of tool/function calls), then `output` will already be parsed as an object:
 
 ```yaml
 assert:
   - type: javascript
     value: output[0].function.name === 'get_current_weather'
 ```
-
-JSON text remains a string; use `JSON.parse(output)` to parse it. [Inline function assertions](#inline-assertions) always receive a string, with objects serialized as JSON.
 
 ## Return type
 
@@ -87,19 +68,11 @@ interface GradingResult {
   pass: boolean;
   score: number;
   reason: string;
-  namedScores?: Record<string, number> | null;
-  namedScoreWeights?: Record<string, number> | null;
-  componentResults?: GradingResult[] | null;
+  componentResults?: GradingResult[];
 }
 ```
 
 If `componentResults` is set, a table of assertion details will be shown in the test output modal in the Eval view.
-
-Numeric returns, `score`, and all values in `namedScores` and `namedScoreWeights` must be finite, including in nested `componentResults`. `NaN` or infinity fails the assertion; finite scores outside 0–1 are accepted. `pass: false` still fails when `reason` is empty.
-
-A `componentResults` array must contain a valid grading result at every index; sparse arrays are rejected.
-
-In results from custom graders and scoring functions, a named score that is a boolean, `null`, or a numeric string is recorded as a number: `true` is 1, and `false` and `null` are 0. A nested component result may omit `reason` and `score`; an omitted score is 1 when `pass` is true and 0 otherwise.
 
 ## Multiline functions
 
@@ -114,7 +87,6 @@ assert:
         return {
           pass: true,
           score: 0.5,
-          reason: 'Output matches the expected value',
         };
       }
       return {
@@ -126,52 +98,15 @@ assert:
 
 ## Using test context
 
-The `context` variable contains information about the test case and execution environment:
+The `context` variable contains the prompt and test case variables:
 
 ```ts
-interface TraceSpan {
-  spanId: string;
-  parentSpanId?: string;
-  name: string;
-  startTime: number; // Unix timestamp in milliseconds
-  endTime?: number; // Unix timestamp in milliseconds
-  attributes?: Record<string, any>;
-  statusCode?: number;
-  statusMessage?: string;
-}
-
-interface TraceData {
-  traceId: string;
-  spans: TraceSpan[];
-}
-
-interface AssertionValueFunctionContext {
+interface AssertContext {
   // Raw prompt sent to LLM
-  prompt: string | undefined;
+  prompt: string;
 
   // Test case variables
   vars: Record<string, string | object>;
-
-  // The complete test case
-  test: AtomicTestCase;
-
-  // Log probabilities from the LLM response, if available
-  logProbs: number[] | undefined;
-
-  // Configuration passed to the assertion
-  config?: Record<string, any>;
-
-  // The provider that generated the response
-  provider: ApiProvider | undefined;
-
-  // The complete provider response
-  providerResponse: ProviderResponse | undefined;
-
-  // OpenTelemetry trace data (when tracing is enabled)
-  trace?: TraceData;
-
-  // Shortcut to providerResponse?.metadata (provider-specific fields)
-  metadata?: Record<string, any>;
 }
 ```
 
@@ -199,32 +134,6 @@ tests:
         value: 'output.length >= context.vars.min_length'
 ```
 
-## Passing assertion-specific parameters
-
-If you want to reuse the same JavaScript assertion with different parameters in a single test case, prefer assertion-level `config` over test `vars`. Test vars are shared across all assertions and appear as report columns, while `config` stays attached to one assertion and is available as `context.config`.
-
-```yaml
-tests:
-  - description: 'Reuse one assertion script with two thresholds'
-    vars:
-      topic: 'bananas'
-    assert:
-      - type: javascript
-        value: file://assertions/min-length.js
-        config:
-          minLength: 5
-      - type: javascript
-        value: file://assertions/min-length.js
-        config:
-          minLength: 20
-```
-
-```js
-module.exports = (output, context) => {
-  return output.length >= context.config.minLength;
-};
-```
-
 ## External script
 
 To reference an external file, use the `file://` prefix:
@@ -233,39 +142,13 @@ To reference an external file, use the `file://` prefix:
 assert:
   - type: javascript
     value: file://relative/path/to/script.js
-    config:
-      maximumOutputSize: 10
 ```
 
-You can specify a particular function to use by appending it after a colon:
-
-```yaml
-assert:
-  - type: javascript
-    value: file://relative/path/to/script.js:customFunction
-```
-
-The JavaScript file must export an assertion function. Here are examples:
+The Javascript file must export an assertion function. Here's an example:
 
 ```js
-// Default export
 module.exports = (output, context) => {
   return output.length > 10;
-};
-```
-
-```js
-// Named exports
-module.exports.customFunction = (output, context) => {
-  return output.includes('specific text');
-};
-```
-
-Here's an example using configuration data defined in the assertion's YAML file:
-
-```js
-module.exports = (output, context) => {
-  return output.length <= context.config.maximumOutputSize;
 };
 ```
 
@@ -274,17 +157,30 @@ Here's a more complex example that uses an async function to hit an external val
 ```js
 const VALIDATION_ENDPOINT = 'https://example.com/api/validate';
 
-module.exports = async (output, context) => {
-  const response = await fetch(VALIDATION_ENDPOINT, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'text/plain',
-    },
-    body: output,
-  });
+async function evaluate(modelResponse) {
+  try {
+    const response = await fetch(VALIDATION_ENDPOINT, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'text/plain',
+      },
+      body: modelResponse,
+    });
 
-  return response.json();
-};
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    throw error;
+  }
+}
+
+async function main(output, context) {
+  const success = await evaluate(output);
+  console.log(`success: ${testResult}`);
+  return success;
+}
+
+module.exports = main;
 ```
 
 You can also return complete [`GradingResult`](/docs/configuration/reference/#gradingresult) objects. For example:
@@ -336,150 +232,9 @@ module.exports = (output, context) => {
 };
 ```
 
-## Inline assertions
-
-If you are using promptfoo as a JS package, you can build your assertion inline:
-
-```js
-{
-  type:"javascript",
-  value: (output, context) => {
-    return output.includes("specific text");
-  }
-}
-```
-
-Here `output` is always a string, so if your [custom response parser](/docs/providers/http/#function-parser) returned an object, use `JSON.parse(output)` to convert it back.
-
-## Using trace data
-
-When [tracing is enabled](/docs/tracing/), OpenTelemetry trace data is available in the `context.trace` object. This allows you to write assertions based on the execution flow:
-
-```js
-module.exports = (output, context) => {
-  // Check if trace data is available
-  if (!context.trace) {
-    // Tracing not enabled, skip trace-based checks
-    return true;
-  }
-
-  const { spans } = context.trace;
-
-  // Example: Check for errors in any span
-  const errorSpans = spans.filter((s) => s.statusCode >= 400);
-  if (errorSpans.length > 0) {
-    return {
-      pass: false,
-      score: 0,
-      reason: `Found ${errorSpans.length} error spans`,
-    };
-  }
-
-  // Example: Calculate total trace duration
-  if (spans.length > 0) {
-    const duration =
-      Math.max(...spans.map((s) => s.endTime || 0)) - Math.min(...spans.map((s) => s.startTime));
-    if (duration > 5000) {
-      // 5 seconds
-      return {
-        pass: false,
-        score: 0,
-        reason: `Trace took too long: ${duration}ms`,
-      };
-    }
-  }
-
-  // Example: Check for specific operations
-  const apiCalls = spans.filter((s) => s.name.toLowerCase().includes('http'));
-  if (apiCalls.length > 10) {
-    return {
-      pass: false,
-      score: 0,
-      reason: `Too many API calls: ${apiCalls.length}`,
-    };
-  }
-
-  return true;
-};
-```
-
-Example YAML configuration:
-
-```yaml
-tests:
-  - vars:
-      query: "What's the weather?"
-    assert:
-      - type: javascript
-        value: |
-          // Ensure retrieval happened before response generation
-          if (context.trace) {
-            const retrievalSpan = context.trace.spans.find(s => s.name.includes('retrieval'));
-            const generationSpan = context.trace.spans.find(s => s.name.includes('generation'));
-            
-            if (retrievalSpan && generationSpan) {
-              return retrievalSpan.startTime < generationSpan.startTime;
-            }
-          }
-          return true;
-```
-
-Additional examples:
-
-```js
-// Check span hierarchy depth
-const MAX_ALLOWED_DEPTH = 1000;
-const maxDepth = (spans, parentId = null, depth = 0) => {
-  if (depth > MAX_ALLOWED_DEPTH) {
-    throw new Error('Span hierarchy too deep');
-  }
-  const children = spans.filter((s) => s.parentSpanId === parentId);
-  if (children.length === 0) return depth;
-  return Math.max(...children.map((c) => maxDepth(spans, c.spanId, depth + 1)));
-};
-
-if (context.trace && maxDepth(context.trace.spans) > 5) {
-  return {
-    pass: false,
-    score: 0,
-    reason: 'Call stack too deep',
-  };
-}
-```
-
 ### ES modules
 
 ES modules are supported, but must have a `.mjs` file extension. Alternatively, if you are transpiling Javascript or Typescript, we recommend pointing promptfoo to the transpiled plain Javascript output.
-
-## Negation
-
-Use `not-javascript` to invert the final pass/fail result while preserving the returned score. Numeric scores are still compared against `threshold` before the result is inverted:
-
-```yaml
-assert:
-  - type: not-javascript
-    value: output.includes('error')
-```
-
-### `GradingResult` reason behavior with `not-javascript`
-
-When your function returns a full `GradingResult` object, the `reason` field is always preserved verbatim regardless of whether inversion changes the outcome. This lets you write negation-aware messages directly in the function:
-
-```yaml
-assert:
-  - type: not-javascript
-    value: |
-      const hasFoo = output.includes('foo');
-      return {
-        pass: hasFoo,
-        score: hasFoo ? 1 : 0,
-        reason: hasFoo
-          ? 'Output contained "foo" — this is forbidden'
-          : 'Output correctly omitted "foo"',
-      };
-```
-
-If the function returns a plain `boolean` or `number`, the standard failure message (`Custom function returned true/false`) is used when the assertion fails.
 
 ## Other assertion types
 

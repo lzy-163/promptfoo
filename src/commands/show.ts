@@ -1,43 +1,26 @@
 import chalk from 'chalk';
-import logger from '../logger';
-import Eval from '../models/eval';
-import { generateTable, wrapTable } from '../table';
-import { getDatasetFromHash, getPromptFromHash, hasRecentEvalWithIdPrefix } from '../util/database';
-import { printBorder, setupEnv } from '../util/index';
 import type { Command } from 'commander';
+import logger from '../logger';
+import { generateTable, wrapTable } from '../table';
+import telemetry from '../telemetry';
+import {
+  getEvalFromId,
+  getPromptFromHash,
+  getDatasetFromHash,
+  printBorder,
+  setupEnv,
+} from '../util';
 
-type MatchedPrompt = NonNullable<Awaited<ReturnType<typeof getPromptFromHash>>>;
+async function handlePrompt(id: string) {
+  telemetry.maybeShowNotice();
+  telemetry.record('command_used', {
+    name: 'show prompt',
+  });
+  await telemetry.send();
 
-function formatMetrics(metrics: MatchedPrompt['evals'][number]['metrics']) {
-  const rawScore = metrics?.score?.toFixed(2) || '-';
-  const passRate =
-    metrics && metrics.testPassCount + metrics.testFailCount + metrics.testErrorCount > 0
-      ? `${(
-          (metrics.testPassCount /
-            (metrics.testPassCount + metrics.testFailCount + metrics.testErrorCount)) *
-            100
-        ).toFixed(2)}%`
-      : '-';
-  const passCount = metrics ? String(metrics.testPassCount ?? 0) : '-';
-  const failCount = metrics?.testFailCount ?? 0;
-  const errorCount = metrics?.testErrorCount ?? 0;
-  return {
-    'Raw score': rawScore,
-    'Pass rate': passRate,
-    'Pass count': passCount,
-    'Fail count':
-      errorCount > 0 ? `${failCount} (+${errorCount} errors)` : metrics ? String(failCount) : '-',
-  };
-}
-
-export async function handlePrompt(id: string) {
-  return showPrompt(id, await getPromptFromHash(id));
-}
-
-function showPrompt(id: string, prompt: MatchedPrompt | undefined) {
+  const prompt = await getPromptFromHash(id);
   if (!prompt) {
     logger.error(`Prompt with ID ${id} not found.`);
-    process.exitCode = 1;
     return;
   }
 
@@ -53,56 +36,54 @@ function showPrompt(id: string, prompt: MatchedPrompt | undefined) {
     table.push({
       'Eval ID': evl.id.slice(0, 6),
       'Dataset ID': evl.datasetId.slice(0, 6),
-      ...formatMetrics(evl.metrics),
+      'Raw score': evl.metrics?.score?.toFixed(2) || '-',
+      'Pass rate':
+        evl.metrics && evl.metrics.testPassCount + evl.metrics.testFailCount > 0
+          ? `${(
+              (evl.metrics.testPassCount /
+                (evl.metrics.testPassCount + evl.metrics.testFailCount)) *
+              100
+            ).toFixed(2)}%`
+          : '-',
+      'Pass count': evl.metrics?.testPassCount || '-',
+      'Fail count': evl.metrics?.testFailCount || '-',
     });
   }
-  logger.info(wrapTable(table) as string);
+  logger.info(wrapTable(table));
   printBorder();
-  printResourceHint('eval');
-  printResourceHint('dataset');
+  logger.info(
+    `Run ${chalk.green('promptfoo show eval <id>')} to see details of a specific evaluation.`,
+  );
+  logger.info(
+    `Run ${chalk.green('promptfoo show dataset <id>')} to see details of a specific dataset.`,
+  );
 }
 
-export async function handleEval(id?: string) {
-  const eval_ = id === undefined ? await Eval.latest() : await Eval.findById(id);
-  if (!eval_) {
-    if (id === undefined) {
-      logger.error('No eval found');
-      logger.info(`Run ${chalk.green('promptfoo eval')} to create one.`);
-    } else {
-      logger.error(`No evaluation found with ID ${id}`);
-      logger.info(`Run ${chalk.green('promptfoo list evals')} to see available evaluation IDs.`);
-    }
-    process.exitCode = 1;
+async function handleEval(id: string) {
+  telemetry.maybeShowNotice();
+  telemetry.record('command_used', {
+    name: 'show eval',
+  });
+  await telemetry.send();
+
+  const evl = await getEvalFromId(id);
+  if (!evl) {
+    logger.error(`No evaluation found with ID ${id}`);
     return;
   }
-  const table = await eval_.getTable();
-  const { prompts, vars } = table.head;
 
-  logger.info(generateTable(table, 100, 25));
-  if (table.body.length > 25) {
-    const rowsLeft = table.body.length - 25;
+  const { prompts, vars } = evl.results.table.head;
+  logger.info(generateTable(evl.results, 100, 25));
+  if (evl.results.table.body.length > 25) {
+    const rowsLeft = evl.results.table.body.length - 25;
     logger.info(`... ${rowsLeft} more row${rowsLeft === 1 ? '' : 's'} not shown ...\n`);
   }
 
   printBorder();
-  logger.info(chalk.cyan(`Eval ${eval_.id}`));
+  logger.info(chalk.cyan(`Eval ${id}`));
   printBorder();
+  // TODO(ian): List prompt ids
   logger.info(`${prompts.length} prompts`);
-  const promptIds = prompts
-    .map((prompt) => prompt.id)
-    .filter((promptId): promptId is string => Boolean(promptId));
-  if (promptIds.length > 0) {
-    const uniquePromptIds = [...new Set(promptIds)];
-    const previewCount = 5;
-    const previewIds = uniquePromptIds.slice(0, previewCount);
-    logger.info(
-      `Prompt IDs: ${previewIds.join(', ')}${
-        uniquePromptIds.length > previewCount
-          ? ` (and ${uniquePromptIds.length - previewCount} more...)`
-          : ''
-      }`,
-    );
-  }
   logger.info(
     `${vars.length} variables: ${vars.slice(0, 5).join(', ')}${
       vars.length > 5 ? ` (and ${vars.length - 5} more...)` : ''
@@ -110,14 +91,16 @@ export async function handleEval(id?: string) {
   );
 }
 
-export async function handleDataset(id: string) {
-  return showDataset(id, await getDatasetFromHash(id));
-}
+async function handleDataset(id: string) {
+  telemetry.maybeShowNotice();
+  telemetry.record('command_used', {
+    name: 'show dataset',
+  });
+  await telemetry.send();
 
-function showDataset(id: string, dataset: Awaited<ReturnType<typeof getDatasetFromHash>>) {
+  const dataset = await getDatasetFromHash(id);
   if (!dataset) {
     logger.error(`Dataset with ID ${id} not found.`);
-    process.exitCode = 1;
     return;
   }
 
@@ -126,57 +109,72 @@ function showDataset(id: string, dataset: Awaited<ReturnType<typeof getDatasetFr
   printBorder();
 
   logger.info(`This dataset is used in the following evals:`);
-  const table = dataset.prompts
+  const table = [];
+  for (const prompt of dataset.prompts
     .sort((a, b) => b.evalId.localeCompare(a.evalId))
-    .slice(0, 10)
-    .map((prompt) => ({
+    .slice(0, 10)) {
+    table.push({
       'Eval ID': prompt.evalId.slice(0, 6),
       'Prompt ID': prompt.id.slice(0, 6),
-      ...formatMetrics(prompt.prompt.metrics),
-    }));
-  logger.info(wrapTable(table) as string);
+      'Raw score': prompt.prompt.metrics?.score?.toFixed(2) || '-',
+      'Pass rate':
+        prompt.prompt.metrics &&
+        prompt.prompt.metrics.testPassCount + prompt.prompt.metrics.testFailCount > 0
+          ? `${(
+              (prompt.prompt.metrics.testPassCount /
+                (prompt.prompt.metrics.testPassCount + prompt.prompt.metrics.testFailCount)) *
+              100
+            ).toFixed(2)}%`
+          : '-',
+      'Pass count': prompt.prompt.metrics?.testPassCount || '-',
+      'Fail count': prompt.prompt.metrics?.testFailCount || '-',
+    });
+  }
+  logger.info(wrapTable(table));
   printBorder();
-  printResourceHint('prompt');
-  printResourceHint('eval');
+  logger.info(
+    `Run ${chalk.green('promptfoo show prompt <id>')} to see details of a specific prompt.`,
+  );
+  logger.info(
+    `Run ${chalk.green('promptfoo show eval <id>')} to see details of a specific evaluation.`,
+  );
 }
 
 export async function showCommand(program: Command) {
   const showCommand = program
-    .command('show [id]')
-    .description('Show details of a specific resource (defaults to most recent)')
-    .option('--env-file, --env-path <path>', 'Path to .env file')
-    .action(async (id: string | undefined, cmdObj: { envPath?: string }) => {
+    .command('show <id>')
+    .description('Show details of a specific resource')
+    .option('--env-path <path>', 'Path to the environment file')
+    .action(async (id: string, cmdObj: { envPath?: string }) => {
       setupEnv(cmdObj.envPath);
+      telemetry.maybeShowNotice();
+      telemetry.record('command_used', {
+        name: 'show',
+      });
 
-      if (!id) {
-        return handleEval();
-      }
-
-      if (await hasRecentEvalWithIdPrefix(id)) {
+      await telemetry.send();
+      const evl = await getEvalFromId(id);
+      if (evl) {
         return handleEval(id);
       }
 
       const prompt = await getPromptFromHash(id);
       if (prompt) {
-        return showPrompt(id, prompt);
+        return handlePrompt(id);
       }
 
       const dataset = await getDatasetFromHash(id);
       if (dataset) {
-        return showDataset(id, dataset);
+        return handleDataset(id);
       }
 
       logger.error(`No resource found with ID ${id}`);
-      logger.info(
-        `Run ${chalk.green('promptfoo list evals')}, ${chalk.green('promptfoo list prompts')}, or ${chalk.green('promptfoo list datasets')} to see available IDs.`,
-      );
-      process.exitCode = 1;
     });
 
   showCommand
-    .command('eval [id]')
-    .description('Show details of a specific evaluation (defaults to most recent)')
-    .action((id?: string) => handleEval(id || undefined));
+    .command('eval <id>')
+    .description('Show details of a specific evaluation')
+    .action(handleEval);
 
   showCommand
     .command('prompt <id>')
@@ -187,10 +185,4 @@ export async function showCommand(program: Command) {
     .command('dataset <id>')
     .description('Show details of a specific dataset')
     .action(handleDataset);
-}
-
-export function printResourceHint(resource: 'eval' | 'prompt' | 'dataset') {
-  logger.info(
-    `Run ${chalk.green(`promptfoo show ${resource} <id>`)} to see details of a specific ${resource === 'eval' ? 'evaluation' : resource}.`,
-  );
 }

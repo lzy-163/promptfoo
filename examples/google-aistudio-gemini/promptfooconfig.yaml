@@ -1,18 +1,14 @@
-# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
-description: Compare Gemini and Gemma on arithmetic
-
 prompts:
-  - '{{puzzle}} Reply with just the number.'
+  - 'Write a tweet about {{topic}}'
+  - 'Write a very concise, funny tweet about {{topic}}'
 
 providers:
-  - id: google:gemini-3.8-flash
+  - id: google:gemini-pro
     config:
-      systemInstruction: file://system-instruction.txt
-  - google:gemma-4-26b-a4b-it
+      generationConfig:
+        temperature: 0
+        topP: 1
 
 tests:
   - vars:
-      puzzle: A train travels at 60 mph for 2.5 hours, then at 40 mph for 1.5 hours. What is its average speed in mph?
-    assert:
-      - type: equals
-        value: '52.5'
+      topic: bananas

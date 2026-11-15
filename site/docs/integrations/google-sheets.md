@@ -1,133 +1,62 @@
 ---
 sidebar_label: Google Sheets
-description: Import and export LLM test cases with Google Sheets integration. Configure public or authenticated access, write evaluation results, and run model-graded metrics.
 ---
 
-# Google Sheets Integration
+# Importing Test Cases from Google Sheets
 
 promptfoo allows you to import eval test cases directly from Google Sheets. This can be done either unauthenticated (if the sheet is public) or authenticated using Google's Default Application Credentials, typically with a service account for programmatic access.
 
-## Importing Test Cases from Google Sheets
+## Unauthenticated Access
 
-### Public Sheets (Unauthenticated)
+If the Google Sheet is set to be accessible by "anyone with the link," you can directly specify the share URL in your YAML configuration. For example:
 
-For sheets that are accessible via "anyone with the link", simply specify the share URL in your configuration:
-
-```yaml title="promptfooconfig.yaml"
-# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
-description: 'Public Google Sheet Example'
+```yaml
 prompts:
-  - 'Please translate the following text to {{language}}: {{input}}'
+  - prompt1.txt
+  - prompt2.txt
 providers:
-  - anthropic:messages:claude-sonnet-5
-  - openai:chat:gpt-5
+  - anthropic:messages:claude-3-opus-20240229
+  - openai:chat:gpt-4-0125-preview
 // highlight-start
 tests: https://docs.google.com/spreadsheets/d/1eqFnv1vzkPvS7zG-mYsqNDwOzvSaiIAsKB3zKg9H18c/edit?usp=sharing
 // highlight-end
 ```
 
-The Google Sheet above is structured with columns that define the test cases. Here's a copy of the sheet:
+Here's an [example sheet](https://docs.google.com/spreadsheets/d/1eqFnv1vzkPvS7zG-mYsqNDwOzvSaiIAsKB3zKg9H18c/edit#gid=0). For more information on how to set up the sheet itself, see [loading assertions from CSV](/docs/configuration/expected-outputs/#load-assertions-from-csv).
 
-```csv title="Google Sheet"
-language,input,__expected
-French,Hello world,icontains: bonjour
-German,I'm hungry,llm-rubric: is german
-Swahili,Hello world,similar(0.8):hello world
+## Authenticated Access with Default Application Credentials
+
+For sheets that are not publicly accessible, you can use authenticated access. This requires setting up Google [Default Application Credentials](https://cloud.google.com/docs/authentication/application-default-credentials). Here’s how you can configure it:
+
+1. **Install peer dependencies**: `npm install googleapis`
+
+1. **Service Account Setup**: Create a [service account](https://console.cloud.google.com/iam-admin/serviceaccounts) in your Google Cloud Platform project. Create a JSON key file and download it.
+
+1. **Enable Google Sheets API**: Enable the [Google Sheets API](https://console.cloud.google.com/apis/library/sheets.googleapis.com) (`sheets.googleapis.com`).
+
+1. **Share Sheet**: Share the Google Sheet with the email address of your service account (`your-service-account@project-name.iam.gserviceaccount.com`) with at least viewer permissions.
+
+1. **Configure Environment**: Set the `GOOGLE_APPLICATION_CREDENTIALS` environment variable to the path of the JSON key file:
+
+```sh
+export GOOGLE_APPLICATION_CREDENTIALS="/path/to/your/service-account-file.json"
 ```
 
-> 💡 See our [example sheet](https://docs.google.com/spreadsheets/d/1eqFnv1vzkPvS7zG-mYsqNDwOzvSaiIAsKB3zKg9H18c/edit#gid=0) for the expected format. For details on sheet structure, refer to [loading assertions from CSV](/docs/configuration/expected-outputs/#load-assertions-from-csv).
-
-### Private Sheets (Authenticated)
-
-For private sheets, you'll need to set up Google's Default Application Credentials:
-
-1. **Check the optional package for authenticated reads and writes**
-
-   Standard npm installs include the package for your Promptfoo version. Public-sheet CSV imports work without it. If you omitted optional dependencies, use the package named in the CLI error. Promptfoo 0.125.1 uses `npm install @googleapis/sheets`. Builds that make Sheets REST requests through Google Auth use `npm install google-auth-library`. Run the command in the project where Promptfoo is installed, or add `-g` for a global npm installation.
-
-2. **Set Up Authentication**
-   - Create a [service account](https://console.cloud.google.com/iam-admin/serviceaccounts) in Google Cloud
-   - Download the JSON key file
-   - Enable the [Google Sheets API](https://console.cloud.google.com/apis/library/sheets.googleapis.com) (`sheets.googleapis.com`)
-   - Share your sheet with the service account email (`your-service-account@project-name.iam.gserviceaccount.com`) with at least viewer permissions
-
-3. **Configure Credentials**
-
-   ```bash
-   export GOOGLE_APPLICATION_CREDENTIALS="/path/to/your/service-account-file.json"
-   ```
-
-4. **Use the Same URL Format**
-   ```yaml
-   tests: https://docs.google.com/spreadsheets/d/1eqFnv1vzkPvS7zG-mYsqNDwOzvSaiIAsKB3zKg9H18c/edit?usp=sharing
-   ```
-   The system will automatically use authenticated access when the sheet is not public.
-
-## Writing Evaluation Results to Google Sheets
-
-The `outputPath` parameter (`--output` or `-o` on the command line) supports writing evaluation results directly to Google Sheets. This requires Default Application Credentials with write access configured.
-
-### Basic Usage
+1. **Update YAML Configuration**: Use the same URL format as in unauthenticated access, but the system will automatically use the authenticated method to access the sheet:
 
 ```yaml
-prompts:
-  - ...
-providers:
-  - ...
-tests:
-  - ...
+tests: https://docs.google.com/spreadsheets/d/1eqFnv1vzkPvS7zG-mYsqNDwOzvSaiIAsKB3zKg9H18c/edit?usp=sharing
+```
+
+## Writing outputs to a Google Sheet
+
+The `outputPath` parameter (`--output` or `-o` on the command line) supports Google Sheets URLs. In order to write, Default Application Credentials must be configured with a service account that has write access.
+
+```yaml
+prompts: [...]
+providers: [...]
+tests: [...]
 // highlight-start
 outputPath: https://docs.google.com/spreadsheets/d/1eqFnv1vzkPvS7zG-mYsqNDwOzvSaiIAsKB3zKg9H18c/edit?usp=sharing
 // highlight-end
 ```
-
-### Targeting Specific Sheets
-
-You have two options when writing results to a Google Sheet:
-
-1. **Write to an existing sheet** by including the sheet's `gid` parameter in the URL:
-
-   ```yaml
-   outputPath: https://docs.google.com/spreadsheets/d/1eqFnv1vzkPvS7zG-mYsqNDwOzvSaiIAsKB3zKg9H18c/edit#gid=123456789
-   ```
-
-   > 💡 To find a sheet's `gid`, open the sheet in your browser and look at the URL - the `gid` appears after the `#gid=` portion.
-
-2. **Create a new sheet automatically** by omitting the `gid` parameter. The system will:
-   - Create a new sheet with a timestamp-based name (e.g., "Sheet1234567890")
-   - Write results to this new sheet
-   - Preserve existing sheets and their data
-
-This behavior helps prevent accidental data overwrites while keeping your evaluation results organized within the same Google Sheets document.
-
-### Output Format
-
-Results are written with columns for test variables followed by prompt outputs. Prompt columns include the provider in the header using the format `[provider] prompt-label`. For example, with two providers testing the same prompt:
-
-| language | input       | [openai:gpt-5] Translate | [anthropic:claude-sonnet-5] Translate |
-| -------- | ----------- | ------------------------ | ------------------------------------- |
-| French   | Hello world | Bonjour le monde         | Bonjour monde                         |
-
-## Using Custom Providers for Model-Graded Metrics
-
-When using Google Sheets for test cases, you can still use custom providers for model-graded metrics
-like `llm-rubric` or `similar`. To do this, override the default LLM grader by adding a `defaultTest` property to your configuration:
-
-```yaml
-prompts:
-  - file://prompt1.txt
-  - file://prompt2.txt
-providers:
-  - anthropic:messages:claude-sonnet-5
-  - openai:chat:gpt-5-mini
-tests: https://docs.google.com/spreadsheets/d/1eqFnv1vzkPvS7zG-mYsqNDwOzvSaiIAsKB3zKg9H18c/edit?usp=sharing
-defaultTest:
-  options:
-    provider:
-      text:
-        id: ollama:chat:llama3.3:70b
-      embedding:
-        id: ollama:embeddings:mxbai-embed-large
-```
-
-For more details on customizing the LLM grader, see the [model-graded metrics documentation](/docs/configuration/expected-outputs/model-graded/#overriding-the-llm-grader).

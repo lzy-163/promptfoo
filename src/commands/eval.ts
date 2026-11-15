@@ -1,257 +1,397 @@
 import chalk from 'chalk';
-import dedent from 'dedent';
-import { z } from 'zod';
-import cliState from '../cliState';
-import { DEFAULT_MAX_CONCURRENCY } from '../constants';
-import logger from '../logger';
-import { doEval, type EvalCommandOptions, EvalCommandSchema } from '../node/doEval';
-import { MAX_SUGGESTIONS_COUNT } from '../types/index';
-import { collectKeyValueOption, normalizeTagOption } from '../util/cliOptions';
-import invariant from '../util/invariant';
-import { getOutputFileFormat, SUPPORTED_OUTPUT_FILE_FORMATS } from '../util/outputFormats';
-import { promptfooCommand } from '../util/promptfooCommand';
+import chokidar from 'chokidar';
 import type { Command } from 'commander';
+import dedent from 'dedent';
+import * as path from 'path';
+import invariant from 'tiny-invariant';
+import { disableCache } from '../cache';
+import cliState from '../cliState';
+import { resolveConfigs } from '../config';
+import { DEFAULT_MAX_CONCURRENCY, evaluate } from '../evaluator';
+import logger, { getLogLevel, setLogLevel } from '../logger';
+import { loadApiProvider } from '../providers';
+import { createShareableUrl } from '../share';
+import { generateTable } from '../table';
+import telemetry from '../telemetry';
+import type { CommandLineOptions, EvaluateOptions, TestSuite, UnifiedConfig } from '../types';
+import { OutputFileExtension, TestSuiteSchema } from '../types';
+import {
+  migrateResultsFromFileSystemToDatabase,
+  printBorder,
+  setupEnv,
+  writeMultipleOutputs,
+  writeOutput,
+  writeResultsToDatabase,
+} from '../util';
+import { filterProviders } from './eval/filterProviders';
+import { filterTests } from './eval/filterTests';
 
-import type { CommandLineOptions, UnifiedConfig } from '../types/index';
-import type { InternalEvaluateOptions } from '../types/internal';
+export async function doEval(
+  cmdObj: CommandLineOptions & Command,
+  defaultConfig: Partial<UnifiedConfig>,
+  defaultConfigPath: string | undefined,
+  evaluateOptions: EvaluateOptions,
+) {
+  setupEnv(cmdObj.envFile);
+  let config: Partial<UnifiedConfig> | undefined = undefined;
+  let testSuite: TestSuite | undefined = undefined;
+  let basePath: string | undefined = undefined;
+
+  const runEvaluation = async (initialization?: boolean) => {
+    const startTime = Date.now();
+    telemetry.record('command_used', {
+      name: 'eval - started',
+      watch: Boolean(cmdObj.watch),
+    });
+    await telemetry.send();
+
+    // Misc settings
+    if (cmdObj.verbose) {
+      setLogLevel('debug');
+    }
+    const iterations = parseInt(cmdObj.repeat || '', 10);
+    const repeat = !isNaN(iterations) && iterations > 0 ? iterations : 1;
+    if (!cmdObj.cache || repeat > 1) {
+      logger.info('Cache is disabled.');
+      disableCache();
+    }
+
+    ({ config, testSuite, basePath } = await resolveConfigs(cmdObj, defaultConfig));
+    cliState.basePath = basePath;
+
+    let maxConcurrency = parseInt(cmdObj.maxConcurrency || '', 10);
+    const delay = parseInt(cmdObj.delay || '', 0);
+
+    if (delay > 0) {
+      maxConcurrency = 1;
+      logger.info(
+        `Running at concurrency=1 because ${delay}ms delay was requested between API calls`,
+      );
+    }
+
+    testSuite.tests = await filterTests(testSuite, {
+      firstN: cmdObj.filterFirstN,
+      pattern: cmdObj.filterPattern,
+      failing: cmdObj.filterFailing,
+    });
+
+    testSuite.providers = filterProviders(testSuite.providers, cmdObj.filterProviders);
+
+    const options: EvaluateOptions = {
+      showProgressBar: getLogLevel() === 'debug' ? false : cmdObj.progressBar,
+      maxConcurrency: !isNaN(maxConcurrency) && maxConcurrency > 0 ? maxConcurrency : undefined,
+      repeat,
+      delay: !isNaN(delay) && delay > 0 ? delay : undefined,
+      interactiveProviders: cmdObj.interactiveProviders,
+      ...evaluateOptions,
+    };
+
+    if (cmdObj.grader) {
+      testSuite.defaultTest = testSuite.defaultTest || {};
+      testSuite.defaultTest.options = testSuite.defaultTest.options || {};
+      testSuite.defaultTest.options.provider = await loadApiProvider(cmdObj.grader);
+    }
+    if (cmdObj.var) {
+      testSuite.defaultTest = testSuite.defaultTest || {};
+      testSuite.defaultTest.vars = { ...testSuite.defaultTest.vars, ...cmdObj.var };
+    }
+    if (cmdObj.generateSuggestions) {
+      options.generateSuggestions = true;
+    }
+
+    const testSuiteSchema = TestSuiteSchema.safeParse(testSuite);
+    if (!testSuiteSchema.success) {
+      logger.warn(
+        chalk.yellow(dedent`
+      TestSuite Schema Validation Error:
+      
+        ${JSON.stringify(testSuiteSchema.error.format())}
+      
+      Please review your promptfooconfig.yaml configuration.`),
+      );
+    }
+
+    const summary = await evaluate(testSuite, {
+      ...options,
+      eventSource: 'cli',
+    });
+
+    const shareableUrl =
+      cmdObj.share && config.sharing ? await createShareableUrl(summary, config) : null;
+
+    if (cmdObj.table && getLogLevel() !== 'debug') {
+      // Output CLI table
+      const table = generateTable(summary, parseInt(cmdObj.tableCellMaxLength || '', 10));
+
+      logger.info('\n' + table.toString());
+      if (summary.table.body.length > 25) {
+        const rowsLeft = summary.table.body.length - 25;
+        logger.info(`... ${rowsLeft} more row${rowsLeft === 1 ? '' : 's'} not shown ...\n`);
+      }
+    } else if (summary.stats.failures !== 0) {
+      logger.debug(
+        `At least one evaluation failure occurred. This might be caused by the underlying call to the provider, or a test failure. Context: \n${JSON.stringify(
+          summary.results,
+        )}`,
+      );
+    }
+
+    await migrateResultsFromFileSystemToDatabase();
+
+    let evalId: string | null = null;
+    if (cmdObj.write) {
+      evalId = await writeResultsToDatabase(summary, config);
+    }
+
+    const { outputPath } = config;
+    if (outputPath) {
+      // Write output to file
+      if (typeof outputPath === 'string') {
+        await writeOutput(outputPath, evalId, summary, config, shareableUrl);
+      } else if (Array.isArray(outputPath)) {
+        await writeMultipleOutputs(outputPath, evalId, summary, config, shareableUrl);
+      }
+      logger.info(chalk.yellow(`Writing output to ${outputPath}`));
+    }
+
+    telemetry.maybeShowNotice();
+
+    printBorder();
+    if (!cmdObj.write) {
+      logger.info(`${chalk.green('✔')} Evaluation complete`);
+    } else {
+      if (shareableUrl) {
+        logger.info(`${chalk.green('✔')} Evaluation complete: ${shareableUrl}`);
+      } else {
+        logger.info(`${chalk.green('✔')} Evaluation complete.\n`);
+        logger.info(
+          `» Run ${chalk.greenBright.bold('promptfoo view')} to use the local web viewer`,
+        );
+        logger.info(`» Run ${chalk.greenBright.bold('promptfoo share')} to create a shareable URL`);
+        logger.info(
+          `» This project needs your feedback. What's one thing we can improve? ${chalk.greenBright.bold(
+            'https://forms.gle/YFLgTe1dKJKNSCsU7',
+          )}`,
+        );
+      }
+    }
+    printBorder();
+    logger.info(chalk.green.bold(`Successes: ${summary.stats.successes}`));
+    logger.info(chalk.red.bold(`Failures: ${summary.stats.failures}`));
+    logger.info(
+      `Token usage: Total ${summary.stats.tokenUsage.total}, Prompt ${summary.stats.tokenUsage.prompt}, Completion ${summary.stats.tokenUsage.completion}, Cached ${summary.stats.tokenUsage.cached}`,
+    );
+
+    telemetry.record('command_used', {
+      name: 'eval',
+      watch: Boolean(cmdObj.watch),
+      duration: Math.round((Date.now() - startTime) / 1000),
+    });
+    await telemetry.send();
+
+    if (cmdObj.watch) {
+      if (initialization) {
+        const configPaths = (cmdObj.config || [defaultConfigPath]).filter(Boolean) as string[];
+        if (!configPaths.length) {
+          logger.error('Could not locate config file(s) to watch');
+          process.exit(1);
+        }
+        const basePath = path.dirname(configPaths[0]);
+        const promptPaths = Array.isArray(config.prompts)
+          ? (config.prompts
+              .map((p) => {
+                if (typeof p === 'string' && p.startsWith('file://')) {
+                  return path.resolve(basePath, p.slice('file://'.length));
+                } else if (typeof p === 'object' && p.id && p.id.startsWith('file://')) {
+                  return path.resolve(basePath, p.id.slice('file://'.length));
+                }
+                return null;
+              })
+              .filter(Boolean) as string[])
+          : [];
+        const providerPaths = Array.isArray(config.providers)
+          ? (config.providers
+              .map((p) =>
+                typeof p === 'string' && p.startsWith('file://')
+                  ? path.resolve(basePath, p.slice('file://'.length))
+                  : null,
+              )
+              .filter(Boolean) as string[])
+          : [];
+        const varPaths = Array.isArray(config.tests)
+          ? config.tests
+              .flatMap((t) => {
+                if (typeof t === 'string' && t.startsWith('file://')) {
+                  return path.resolve(basePath, t.slice('file://'.length));
+                } else if (typeof t !== 'string' && t.vars) {
+                  return Object.values(t.vars).flatMap((v) => {
+                    if (typeof v === 'string' && v.startsWith('file://')) {
+                      return path.resolve(basePath, v.slice('file://'.length));
+                    }
+                    return [];
+                  });
+                }
+                return [];
+              })
+              .filter(Boolean)
+          : [];
+        const watchPaths = Array.from(
+          new Set([...configPaths, ...promptPaths, ...providerPaths, ...varPaths]),
+        );
+        const watcher = chokidar.watch(watchPaths, { ignored: /^\./, persistent: true });
+
+        watcher
+          .on('change', async (path) => {
+            printBorder();
+            logger.info(`File change detected: ${path}`);
+            printBorder();
+            await runEvaluation();
+          })
+          .on('error', (error) => logger.error(`Watcher error: ${error}`))
+          .on('ready', () =>
+            watchPaths.forEach((watchPath) =>
+              logger.info(`Watching for file changes on ${watchPath} ...`),
+            ),
+          );
+      }
+    } else {
+      logger.info('Done.');
+
+      if (summary.stats.failures > 0) {
+        const exitCode = Number(process.env.PROMPTFOO_FAILED_TEST_EXIT_CODE);
+        process.exit(isNaN(exitCode) ? 100 : exitCode);
+      }
+    }
+  };
+
+  await runEvaluation(true /* initialization */);
+}
 
 export function evalCommand(
   program: Command,
   defaultConfig: Partial<UnifiedConfig>,
   defaultConfigPath: string | undefined,
+  evaluateOptions: EvaluateOptions,
 ) {
-  const evaluateOptions: InternalEvaluateOptions = {};
-  if (defaultConfig.evaluateOptions) {
-    evaluateOptions.generateSuggestions = defaultConfig.evaluateOptions.generateSuggestions;
-    evaluateOptions.suggestionsCount = defaultConfig.evaluateOptions.suggestionsCount;
-    evaluateOptions.maxConcurrency = defaultConfig.evaluateOptions.maxConcurrency;
-    evaluateOptions.showProgressBar = defaultConfig.evaluateOptions.showProgressBar;
-  }
-
-  const evalCmd = program
+  program
     .command('eval')
     .description('Evaluate prompts')
-
-    // Core configuration
-    .option(
-      '-c, --config <paths...>',
-      'Path to configuration file or cloud config UUID. Automatically loads promptfooconfig.yaml',
-    )
-
-    // Input sources
-    .option('-a, --assertions <path>', 'Path to assertions file')
     .option('-p, --prompts <paths...>', 'Paths to prompt files (.txt)')
     .option(
       '-r, --providers <name or path...>',
       'One of: openai:chat, openai:completion, openai:<model name>, or path to custom API caller module',
     )
-    .option('-t, --tests <path>', 'Path to CSV with test cases')
     .option(
-      '-v, --vars <path>',
-      'Path to CSV with test cases (alias for --tests)',
+      '-c, --config <paths...>',
+      'Path to configuration file. Automatically loads promptfooconfig.js/json/yaml',
+    )
+    .option(
+      // TODO(ian): Remove `vars` for v1
+      '-v, --vars, -t, --tests <path>',
+      'Path to CSV with test cases',
       defaultConfig?.commandLineOptions?.vars,
     )
+    .option('-a, --assertions <path>', 'Path to assertions file')
     .option('--model-outputs <path>', 'Path to JSON containing list of LLM output strings')
-
-    // Prompt modification
+    .option('-t, --tests <path>', 'Path to CSV with test cases')
+    .option(
+      '-o, --output <paths...>',
+      'Path to output file (csv, txt, json, yaml, yml, html), default is no output file',
+    )
+    .option(
+      '-j, --max-concurrency <number>',
+      'Maximum number of concurrent API calls',
+      defaultConfig.evaluateOptions?.maxConcurrency
+        ? String(defaultConfig.evaluateOptions.maxConcurrency)
+        : `${DEFAULT_MAX_CONCURRENCY}`,
+    )
+    .option(
+      '--repeat <number>',
+      'Number of times to run each test',
+      defaultConfig.evaluateOptions?.repeat ? String(defaultConfig.evaluateOptions.repeat) : '1',
+    )
+    .option(
+      '--delay <number>',
+      'Delay between each test (in milliseconds)',
+      defaultConfig.evaluateOptions?.delay ? String(defaultConfig.evaluateOptions.delay) : '0',
+    )
+    .option(
+      '--table-cell-max-length <number>',
+      'Truncate console table cells to this length',
+      '250',
+    )
+    .option(
+      '--suggest-prompts <number>',
+      'Generate N new prompts and append them to the prompt list',
+    )
     .option(
       '--prompt-prefix <path>',
       'This prefix is prepended to every prompt',
-      typeof defaultConfig.defaultTest === 'object'
-        ? defaultConfig.defaultTest?.options?.prefix
-        : undefined,
+      defaultConfig.defaultTest?.options?.prefix,
     )
     .option(
       '--prompt-suffix <path>',
-      'This suffix is appended to every prompt.',
-      typeof defaultConfig.defaultTest === 'object'
-        ? defaultConfig.defaultTest?.options?.suffix
-        : undefined,
+      'This suffix is append to every prompt',
+      defaultConfig.defaultTest?.options?.suffix,
     )
-    .option(
-      '--var <key=value>',
-      'Set a variable in key=value format',
-      (value: string, previous: Record<string, string> | undefined) => {
-        return collectKeyValueOption('--var', value, previous);
-      },
-      {},
-    )
-    .option(
-      '--tag <key=value>',
-      'Set an eval tag in key=value format. Can be specified multiple times; CLI tags override config tags.',
-      (value: string, previous: Record<string, string> | undefined) => {
-        return collectKeyValueOption('--tag', value, previous);
-      },
-    )
-
-    // Execution control
-    .option(
-      '-j, --max-concurrency <number>',
-      `Maximum number of concurrent API calls (default: ${DEFAULT_MAX_CONCURRENCY})`,
-    )
-    .option('--repeat <number>', 'Number of times to run each test (default: 1)')
-    .option('--delay <number>', 'Delay between each test (in milliseconds) (default: 0)')
-    .option('--no-cache', 'Do not read or write results to disk cache')
-    .option('--remote', 'Force remote inference wherever possible (used for red teams)', false)
-    .option(
-      '--safe-mode',
-      'Disable dynamic inline JavaScript execution for transforms and assertions',
-      defaultConfig?.commandLineOptions?.safeMode,
-    )
-
-    // Filtering and subset selection
-    .option('-n, --filter-first-n <number>', 'Only run the first N tests')
-    .option(
-      '--filter-pattern <pattern>',
-      'Only run tests whose description matches the regular expression pattern',
-    )
-    .option(
-      '--filter-range <start:end>',
-      'Only run tests whose zero-based index is in the range. End is exclusive (e.g. 0:10, 10:20, 10:, :10)',
-    )
-    .option(
-      '--filter-prompts <pattern>',
-      'Only run tests with prompts whose id or label matches the regex pattern',
-    )
-    .option(
-      '--filter-providers, --filter-targets <providers>',
-      'Only run tests with these providers (regex match)',
-    )
-    .option('--filter-sample <number>', 'Only run a random sample of N tests')
-    .option('--filter-sample-seed <number>', 'Numeric seed used to make --filter-sample repeatable')
-    .option(
-      '--filter-failing <path or id>',
-      'Path to json output file or eval ID to filter non-passing tests from (failures + errors)',
-    )
-    .option(
-      '--filter-failing-only <path or id>',
-      'Path to json output file or eval ID to filter assertion failures from (excludes errors)',
-    )
-    .option(
-      '--filter-errors-only <path or id>',
-      'Path to json output file or eval ID to filter error tests from',
-    )
-    .option(
-      '--filter-metadata <key=value>',
-      'Only run tests whose metadata matches key=value. Comma-separated values use OR, and \\, is a literal comma; repeated flags use AND, even for the same key (e.g. --filter-metadata type=unit,integration --filter-metadata env=prod)',
-      (value: string, previous: string[] | undefined) => {
-        return previous ? [...previous, value] : [value];
-      },
-    )
-
-    // Output configuration
-    .option(
-      '-o, --output <paths...>',
-      `Path to output file (${SUPPORTED_OUTPUT_FILE_FORMATS.join(', ')}), default is no output file`,
-    )
-    .option('--table', 'Output table in CLI', defaultConfig?.commandLineOptions?.table ?? true)
-    .option('--no-table', 'Do not output table in CLI', defaultConfig?.commandLineOptions?.table)
-    .option('--table-cell-max-length <number>', 'Truncate console table cells to this length')
-    .option('--share', 'Create a shareable URL', defaultConfig?.commandLineOptions?.share)
-    .option('--no-share', 'Do not share, this overrides the config file')
-    .option(
-      '--resume [evalId]',
-      'Resume a paused/incomplete evaluation. Defaults to latest when omitted',
-    )
-    .option('--retry-errors', 'Retry all ERROR results from the latest evaluation')
     .option(
       '--no-write',
       'Do not write results to promptfoo directory',
       defaultConfig?.commandLineOptions?.write,
     )
-
-    // Additional features
+    .option(
+      '--no-cache',
+      'Do not read or write results to disk cache',
+      // TODO(ian): Remove commandLineOptions.cache in v1
+      defaultConfig?.commandLineOptions?.cache ?? defaultConfig?.evaluateOptions?.cache,
+    )
+    .option('--no-progress-bar', 'Do not show progress bar')
+    .option('--table', 'Output table in CLI', defaultConfig?.commandLineOptions?.table ?? true)
+    .option('--no-table', 'Do not output table in CLI', defaultConfig?.commandLineOptions?.table)
+    .option('--share', 'Create a shareable URL', defaultConfig?.commandLineOptions?.share)
     .option(
       '--grader <provider>',
       'Model that will grade outputs',
       defaultConfig?.commandLineOptions?.grader,
     )
-    .option(
-      '--suggest-prompts <number>',
-      `Generate N new prompts (1-${MAX_SUGGESTIONS_COUNT}) and append them to the prompt list`,
-    )
+    .option('--verbose', 'Show debug logs', defaultConfig?.commandLineOptions?.verbose)
     .option('-w, --watch', 'Watch for changes in config and re-run')
+    .option('--env-file <path>', 'Path to .env file')
     .option(
-      '-x, --extension <paths...>',
-      'Extension hooks to run (e.g., file://handler.js:afterAll)',
+      '--interactive-providers',
+      'Run providers interactively, one at a time',
+      defaultConfig?.evaluateOptions?.interactiveProviders,
     )
-
-    // Miscellaneous
-    .option('--description <description>', 'Description of the eval run')
-    .option('--no-progress-bar', 'Do not show progress bar')
-    .action(async (opts: EvalCommandOptions, command: Command) => {
-      let validatedOpts: z.infer<typeof EvalCommandSchema>;
-      try {
-        const optsWithAliases = normalizeTagOption(
-          opts as EvalCommandOptions & { tag?: Record<string, string> },
-        );
-        // Commander defaults a lone `--no-cache` to `true`. Only an explicit flag should
-        // override the loaded config's `commandLineOptions.cache` / `evaluateOptions.cache`.
-        if (command.getOptionValueSource('cache') !== 'cli') {
-          delete optsWithAliases.cache;
+    .option('-n, --filter-first-n <number>', 'Only run the first N tests')
+    .option(
+      '--filter-pattern <pattern>',
+      'Only run tests whose description matches the regular expression pattern',
+    )
+    .option('--filter-providers <providers>', 'Only run tests with these providers')
+    .option('--filter-failing <path>', 'Path to json output file')
+    .option(
+      '--var <key=value>',
+      'Set a variable in key=value format',
+      (value, previous: Record<string, string> = {}) => {
+        const [key, val] = value.split('=');
+        if (!key || val === undefined) {
+          throw new Error('--var must be specified in key=value format.');
         }
-        validatedOpts = EvalCommandSchema.parse(optsWithAliases);
-      } catch (err) {
-        logger.error(dedent`
-        Invalid command options:
-        ${err instanceof z.ZodError ? z.prettifyError(err) : err}
-        `);
-        process.exitCode = 1;
-        return;
-      }
-      if (command.args.length > 0) {
-        if (command.args[0] === 'help') {
-          evalCmd.help();
-          return;
-        }
-        logger.error(`Unknown command: ${command.args[0]}. Did you mean -c ${command.args[0]}?`);
-        process.exitCode = 1;
-        return;
-      }
-
-      if (validatedOpts.help) {
-        evalCmd.help();
-        return;
-      }
-
-      if (validatedOpts.interactiveProviders) {
-        const runCommand = promptfooCommand('eval');
-        logger.warn(
-          chalk.yellow(dedent`
-          Warning: The --interactive-providers option has been removed.
-
-          Instead, use -j 1 to run evaluations with a concurrency of 1:
-          ${chalk.green(`${runCommand} -j 1`)}
-        `),
+        previous[key] = val;
+        return previous;
+      },
+      {},
+    )
+    .action((opts) => {
+      for (const maybeFilePath of opts.output ?? []) {
+        const { data: extension } = OutputFileExtension.safeParse(
+          maybeFilePath.split('.').pop()?.toLowerCase(),
         );
-        process.exitCode = 2;
-        return;
-      }
-
-      if (validatedOpts.remote) {
-        cliState.remote = true;
-      }
-
-      for (const maybeFilePath of validatedOpts.output ?? []) {
-        const extension = getOutputFileFormat(maybeFilePath);
         invariant(
           extension,
-          `Unsupported output file format: ${maybeFilePath}. Please use one of: ${SUPPORTED_OUTPUT_FILE_FORMATS.join(', ')}.`,
+          `Unsupported output file format: ${maybeFilePath}. Please use one of: ${OutputFileExtension.options.join(', ')}.`,
         );
       }
-      await doEval(
-        validatedOpts as Partial<CommandLineOptions & Command>,
-        defaultConfig,
-        defaultConfigPath,
-        { ...evaluateOptions, eventSource: 'cli' },
-      );
+      doEval(opts, defaultConfig, defaultConfigPath, evaluateOptions);
     });
-
-  return evalCmd;
 }
-
-export { EvalRunError, showRedteamProviderLabelMissingWarning } from '../node/doEval';
-
-export type { EvalCommandOptions };
-// Preserve established command-module imports while the implementation lives in the node layer.
-export { doEval, EvalCommandSchema };

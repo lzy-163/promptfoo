@@ -1,8 +1,3 @@
----
-sidebar_label: Evaluating LLM Text-to-SQL Performance
-description: Compare text-to-SQL accuracy across GPT-5-mini and GPT-5 using automated test cases and schema validation to optimize database query generation performance
----
-
 # Evaluating LLM text-to-SQL performance
 
 Promptfoo is a command-line tool that allows you to test and validate text-to-SQL conversions.
@@ -15,7 +10,7 @@ The end result is a view that looks like this:
 
 ## Configuration
 
-Start by creating a `promptfooconfig.yaml` file.
+Start by creating a blank `promptfooconfig.yaml` file (optionally, generate a placeholder using `npx promptfoo@latest init`).
 
 ### Step 1: Define the Prompt(s)
 
@@ -42,12 +37,12 @@ prompts:
 
 ### Step 2: Specify the Providers
 
-Define one or more language model providers to use. For example, here we compare the performance between GPT-5-mini and GPT-5:
+Define one or more language model providers to use. For example, here we compare the performance between GPT 3.5 and GPT 4:
 
 ```yaml
 providers:
-  - openai:gpt-5-mini
-  - openai:gpt-5
+  - openai:gpt-4o-mini
+  - openai:gpt-4o
 ```
 
 A wide variety of LLM APIs are supported, including local models. See [providers](/docs/providers) for more information.
@@ -164,7 +159,7 @@ prompts:
     Only output SQL code.
 
 providers:
-  - openai:gpt-5-mini
+  - openai:gpt-4o-mini
 
 tests:
   - vars:
