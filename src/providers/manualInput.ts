@@ -1,7 +1,6 @@
 import editor from '@inquirer/editor';
 import input from '@inquirer/input';
-
-import type { ApiProvider, ProviderResponse } from '../types/index';
+import type { ApiProvider, ProviderResponse } from '../types';
 
 interface ManualInputProviderOptions {
   id?: string;
@@ -11,7 +10,7 @@ interface ManualInputProviderOptions {
 }
 
 export class ManualInputProvider implements ApiProvider {
-  config: ManualInputProviderOptions['config'];
+  private config: ManualInputProviderOptions['config'];
 
   constructor(options: ManualInputProviderOptions = {}) {
     this.config = options.config;

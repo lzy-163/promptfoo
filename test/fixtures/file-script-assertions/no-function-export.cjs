@@ -1,1 +1,0 @@
-module.exports = { notAFunction: true };

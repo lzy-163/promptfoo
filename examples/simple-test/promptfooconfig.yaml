@@ -1,10 +1,5 @@
-# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
-description: Basic assertion types and test case fundamentals
-
-prompts:
-  - file://prompts.txt
-providers:
-  - openai:chat:gpt-5.4-mini
+prompts: [prompts.txt]
+providers: [openai:gpt-3.5-turbo]
 tests:
   - description: Check for exact match
     vars:
@@ -51,7 +46,7 @@ tests:
       # $ref can be used as a shorthand to include reusable templates
       - $ref: '#/assertionTemplates/containsPirateNoise'
 
-outputPath: file://output.csv
+outputPath: output.csv
 
 assertionTemplates:
   containsPirateNoise:

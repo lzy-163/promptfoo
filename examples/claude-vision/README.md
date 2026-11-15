@@ -1,15 +1,4 @@
-# claude-vision (Claude Vision)
-
-You can run this example with:
-
-```bash
-npx promptfoo@latest init --example claude-vision
-cd claude-vision
-```
-
-## Usage
-
-Getting started with Claude vision via Anthropic and/or AWS Bedrock. The config runs Claude Haiku 4.5 and Claude Sonnet 5 side by side.
+Getting Started with claude3 via Anthropic and/or AWS Bedrock
 
 To get started, set your environment variables:
 
@@ -18,7 +7,7 @@ To get started, set your environment variables:
 
 Then run:
 
-```bash
+```
 promptfoo eval
 ```
 

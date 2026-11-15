@@ -1,6 +1,5 @@
 ---
-sidebar_label: Evaluating JSON Outputs
-description: Validate and test LLM JSON outputs with automated schema checks and field assertions to ensure reliable, well-formed data structures in your AI applications
+sidebar_label: Evaluating JSON outputs
 ---
 
 # LLM evaluation techniques for JSON outputs
@@ -15,7 +14,7 @@ This guide explains some eval techniques for testing your model's JSON quality o
 
 ## Prerequisites
 
-Before proceeding, ensure you have a basic understanding of how to set up test cases and assertions. Find more information in the [Getting Started](/docs/getting-started) guide and the [Assertions & Metrics](/docs/configuration/expected-outputs/index.md) documentation.
+Before proceeding, ensure you have a basic understanding of how to set up test cases and assertions. Find more information in the [Getting Started](/docs/getting-started) guide and the [Expected Outputs](/docs/configuration/expected-outputs/index.md) documentation.
 
 ## Example Scenario
 
@@ -43,7 +42,7 @@ assert:
 
 If you want to validate the structure of the JSON output, you can define a JSON schema. Here's an example of using the `is-json` assertion with a schema that requires `color` to be a string and `countries` to be a list of strings:
 
-```yaml title="promptfooconfig.yaml"
+```yaml title=promptfooconfig.yaml
 prompts:
   - "Output a JSON object that contains the keys `color` and `countries`, describing the following object: {{item}}"
 
@@ -129,18 +128,14 @@ tests:
     // highlight-end
     assert:
       - type: contains-any
-        value:
-          - Guatemala
-          - Costa Rica
-          - India
-          - Indonesia
+        value: [Guatemala, Costa Rica, India, Indonesia]
       - type: llm-rubric
         value: is someplace likely to find {{item}}
 ```
 
 ## Example
 
-See the full example in [Github](https://github.com/promptfoo/promptfoo/tree/main/examples/eval-json-output).
+See the full example in [Github](https://github.com/promptfoo/promptfoo/tree/main/examples/json-output).
 
 ## Conclusion
 

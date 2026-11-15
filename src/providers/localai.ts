@@ -1,16 +1,12 @@
 import { fetchWithCache } from '../cache';
-import { getEnvFloat, parseEnvFloat } from '../envars';
-import { resolveProviderEnv } from './env';
-import { getRequestTimeoutMs, parseChatPrompt } from './shared';
-
-import type { EnvOverrides } from '../types/env';
+import logger from '../logger';
 import type {
   ApiProvider,
-  CallApiContextParams,
-  CallApiOptionsParams,
+  EnvOverrides,
   ProviderEmbeddingResponse,
   ProviderResponse,
-} from '../types/index';
+} from '../types';
+import { REQUEST_TIMEOUT_MS, parseChatPrompt } from './shared';
 
 interface LocalAiCompletionOptions {
   apiBaseUrl?: string;
@@ -21,7 +17,6 @@ class LocalAiGenericProvider implements ApiProvider {
   modelName: string;
   apiBaseUrl: string;
   config: LocalAiCompletionOptions;
-  env?: EnvOverrides;
 
   constructor(
     modelName: string,
@@ -29,10 +24,10 @@ class LocalAiGenericProvider implements ApiProvider {
   ) {
     const { id, config, env } = options;
     this.modelName = modelName;
-    this.env = env;
     this.apiBaseUrl =
       config?.apiBaseUrl ||
-      resolveProviderEnv(env, ['LOCALAI_BASE_URL'])?.value ||
+      env?.LOCALAI_BASE_URL ||
+      process.env.LOCALAI_BASE_URL ||
       'http://localhost:8080/v1';
     this.config = config || {};
     this.id = id ? () => id : this.id;
@@ -47,27 +42,25 @@ class LocalAiGenericProvider implements ApiProvider {
   }
 
   // @ts-ignore: Prompt is not used in this implementation
-  async callApi(_prompt: string): Promise<ProviderResponse> {
+  async callApi(prompt: string): Promise<ProviderResponse> {
     throw new Error('Not implemented');
   }
 }
 
 export class LocalAiChatProvider extends LocalAiGenericProvider {
-  async callApi(prompt: string, context?: CallApiContextParams): Promise<ProviderResponse> {
+  async callApi(prompt: string): Promise<ProviderResponse> {
     const messages = parseChatPrompt(prompt, [{ role: 'user', content: prompt }]);
     const body = {
       model: this.modelName,
-      messages,
-      temperature:
-        this.config.temperature ??
-        parseEnvFloat(this.env?.LOCALAI_TEMPERATURE) ??
-        getEnvFloat('LOCALAI_TEMPERATURE') ??
-        0.7,
+      messages: messages,
+      temperature: this.config.temperature || process.env.LOCALAI_TEMPERATURE || 0.7,
     };
+    logger.debug(`Calling LocalAI API: ${JSON.stringify(body)}`);
 
-    let data;
+    let data,
+      cached = false;
     try {
-      ({ data } = (await fetchWithCache(
+      ({ data, cached } = (await fetchWithCache(
         `${this.apiBaseUrl}/chat/completions`,
         {
           method: 'POST',
@@ -76,22 +69,14 @@ export class LocalAiChatProvider extends LocalAiGenericProvider {
           },
           body: JSON.stringify(body),
         },
-        getRequestTimeoutMs(),
-        'json',
-        context?.bustCache ?? context?.debug,
+        REQUEST_TIMEOUT_MS,
       )) as unknown as any);
     } catch (err) {
       return {
         error: `API call error: ${String(err)}`,
       };
     }
-
-    if (!data?.choices?.[0]?.message) {
-      return {
-        error: `Malformed response data: ${JSON.stringify(data)}`,
-      };
-    }
-
+    logger.debug(`\tLocalAI API chat completions response: ${JSON.stringify(data)}`);
     try {
       return {
         output: data.choices[0].message.content,
@@ -105,20 +90,15 @@ export class LocalAiChatProvider extends LocalAiGenericProvider {
 }
 
 export class LocalAiEmbeddingProvider extends LocalAiGenericProvider {
-  readonly supportsEmbeddingCancellation = true;
-
-  async callEmbeddingApi(
-    text: string,
-    _context?: CallApiContextParams,
-    options?: CallApiOptionsParams,
-  ): Promise<ProviderEmbeddingResponse> {
+  async callEmbeddingApi(text: string): Promise<ProviderEmbeddingResponse> {
     const body = {
       input: text,
       model: this.modelName,
     };
-    let data;
+    let data,
+      cached = false;
     try {
-      ({ data } = (await fetchWithCache(
+      ({ data, cached } = (await fetchWithCache(
         `${this.apiBaseUrl}/embeddings`,
         {
           method: 'POST',
@@ -126,16 +106,15 @@ export class LocalAiEmbeddingProvider extends LocalAiGenericProvider {
             'Content-Type': 'application/json',
           },
           body: JSON.stringify(body),
-          ...(options?.abortSignal && { signal: options.abortSignal }),
         },
-        getRequestTimeoutMs(),
+        REQUEST_TIMEOUT_MS,
       )) as unknown as any);
     } catch (err) {
-      options?.abortSignal?.throwIfAborted();
       return {
         error: `API call error: ${String(err)}`,
       };
     }
+    logger.debug(`\tLocalAI embeddings API response: ${JSON.stringify(data)}`);
 
     try {
       const embedding = data?.data?.[0]?.embedding;
@@ -154,20 +133,18 @@ export class LocalAiEmbeddingProvider extends LocalAiGenericProvider {
 }
 
 export class LocalAiCompletionProvider extends LocalAiGenericProvider {
-  async callApi(prompt: string, context?: CallApiContextParams): Promise<ProviderResponse> {
+  async callApi(prompt: string): Promise<ProviderResponse> {
     const body = {
       model: this.modelName,
       prompt,
-      temperature:
-        this.config.temperature ??
-        parseEnvFloat(this.env?.LOCALAI_TEMPERATURE) ??
-        getEnvFloat('LOCALAI_TEMPERATURE') ??
-        0.7,
+      temperature: this.config.temperature || process.env.LOCALAI_TEMPERATURE || 0.7,
     };
+    logger.debug(`Calling LocalAI API: ${JSON.stringify(body)}`);
 
-    let data;
+    let data,
+      cached = false;
     try {
-      ({ data } = (await fetchWithCache(
+      ({ data, cached } = (await fetchWithCache(
         `${this.apiBaseUrl}/completions`,
         {
           method: 'POST',
@@ -176,22 +153,14 @@ export class LocalAiCompletionProvider extends LocalAiGenericProvider {
           },
           body: JSON.stringify(body),
         },
-        getRequestTimeoutMs(),
-        'json',
-        context?.bustCache ?? context?.debug,
+        REQUEST_TIMEOUT_MS,
       )) as unknown as any);
     } catch (err) {
       return {
         error: `API call error: ${String(err)}`,
       };
     }
-
-    if (!data?.choices?.[0]) {
-      return {
-        error: `Malformed response data: ${JSON.stringify(data)}`,
-      };
-    }
-
+    logger.debug(`\tLocalAI completions API response: ${JSON.stringify(data)}`);
     try {
       return {
         output: data.choices[0].text,

@@ -1,9 +1,6 @@
 import { fetchWithCache } from '../cache';
-import { resolveProviderEnv } from './env';
-import { getRequestTimeoutMs } from './shared';
-
-import type { EnvOverrides } from '../contracts/env';
-import type { ApiProvider, ProviderResponse } from '../types/index';
+import type { ApiProvider, ProviderResponse } from '../types';
+import { REQUEST_TIMEOUT_MS } from './shared';
 
 interface LlamaCompletionOptions {
   n_predict?: number;
@@ -17,25 +14,20 @@ interface LlamaCompletionOptions {
   penalize_nl?: boolean;
   presence_penalty?: number;
   frequency_penalty?: number;
-  mirostat?: 0 | 1 | 2 | boolean;
+  mirostat?: boolean;
   mirostat_tau?: number;
   mirostat_eta?: number;
   seed?: number;
   ignore_eos?: boolean;
-  logit_bias?: Record<string, number> | [string | number, number | false][];
+  logit_bias?: Record<string, number>;
 }
 
 export class LlamaProvider implements ApiProvider {
   modelName: string;
   config?: LlamaCompletionOptions;
-  env?: EnvOverrides;
 
-  constructor(
-    modelName: string,
-    options: { config?: LlamaCompletionOptions; env?: EnvOverrides; id?: string } = {},
-  ) {
-    const { config, id, env } = options;
-    this.env = env;
+  constructor(modelName: string, options: { config?: LlamaCompletionOptions; id?: string } = {}) {
+    const { config, id } = options;
     this.modelName = modelName;
     this.config = config;
     this.id = id ? () => id : this.id;
@@ -52,7 +44,7 @@ export class LlamaProvider implements ApiProvider {
   async callApi(prompt: string): Promise<ProviderResponse> {
     const body = {
       prompt,
-      n_predict: this.config?.n_predict ?? 512,
+      n_predict: this.config?.n_predict || 512,
       temperature: this.config?.temperature,
       top_k: this.config?.top_k,
       top_p: this.config?.top_p,
@@ -71,18 +63,10 @@ export class LlamaProvider implements ApiProvider {
       logit_bias: this.config?.logit_bias,
     };
 
-    const url = resolveProviderEnv(this.env, ['LLAMA_BASE_URL'])?.value || 'http://localhost:8080';
-
-    interface LlamaCompletionResponse {
-      content: string;
-    }
-
-    let data: LlamaCompletionResponse;
-    let cached = false;
-    let latencyMs: number | undefined;
+    let response;
     try {
-      ({ data, cached, latencyMs } = await fetchWithCache<LlamaCompletionResponse>(
-        `${url}/completion`,
+      response = await fetchWithCache(
+        `${process.env.LLAMA_BASE_URL || 'http://localhost:8080'}/completion`,
         {
           method: 'POST',
           headers: {
@@ -90,8 +74,8 @@ export class LlamaProvider implements ApiProvider {
           },
           body: JSON.stringify(body),
         },
-        getRequestTimeoutMs(),
-      ));
+        REQUEST_TIMEOUT_MS,
+      );
     } catch (err) {
       return {
         error: `API call error: ${String(err)}`,
@@ -100,13 +84,11 @@ export class LlamaProvider implements ApiProvider {
 
     try {
       return {
-        output: data.content,
-        cached,
-        latencyMs,
+        output: response.data.content,
       };
     } catch (err) {
       return {
-        error: `API response error: ${String(err)}: ${JSON.stringify(data)}`,
+        error: `API response error: ${String(err)}: ${JSON.stringify(response.data)}`,
       };
     }
   }

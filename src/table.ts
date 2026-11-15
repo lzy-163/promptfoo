@@ -1,15 +1,17 @@
 import chalk from 'chalk';
 import Table from 'cli-table3';
 import { TERMINAL_MAX_WIDTH } from './constants';
-import { type EvaluateTable, ResultFailureReason } from './types/index';
-import { ellipsize } from './util/text';
+import type { EvaluateSummary } from './types';
 
-export function generateTable(
-  evaluateTable: EvaluateTable,
-  tableCellMaxLength = 250,
-  maxRows = 25,
-): string {
-  const head = evaluateTable.head;
+function ellipsize(str: string, maxLen: number) {
+  if (str.length > maxLen) {
+    return str.slice(0, maxLen - 3) + '...';
+  }
+  return str;
+}
+
+export function generateTable(summary: EvaluateSummary, tableCellMaxLength = 250, maxRows = 25) {
+  const head = summary.table.head;
   const headLength = head.prompts.length + head.vars.length;
   const table = new Table({
     head: [
@@ -24,50 +26,40 @@ export function generateTable(
     },
   });
   // Skip first row (header) and add the rest. Color PASS/FAIL
-  for (const row of evaluateTable.body.slice(0, maxRows)) {
+  for (const row of summary.table.body.slice(0, maxRows)) {
     table.push([
       ...row.vars.map((v) => ellipsize(v, tableCellMaxLength)),
-      ...row.outputs.map(({ pass, text, failureReason: failureType }) => {
+      ...row.outputs.map(({ pass, score, text }) => {
         text = ellipsize(text, tableCellMaxLength);
         if (pass) {
           return chalk.green('[PASS] ') + text;
+        } else if (!pass) {
+          // color everything red up until '---'
+          return (
+            chalk.red('[FAIL] ') +
+            text
+              .split('---')
+              .map((c, idx) => (idx === 0 ? chalk.red.bold(c) : c))
+              .join('---')
+          );
         }
-
-        // Color everything red up until '---'.
-        return (
-          chalk.red(failureType === ResultFailureReason.ASSERT ? '[FAIL] ' : '[ERROR] ') +
-          text
-            .split('---')
-            .map((c, idx) => (idx === 0 ? chalk.red.bold(c) : c))
-            .join('---')
-        );
+        return text;
       }),
     ]);
   }
-  return table.toString();
+  return table;
 }
 
-export function wrapTable(
-  rows: Record<string, string | number>[],
-  columnWidths?: Record<string, number>,
-) {
-  if (rows.length === 0) {
-    return 'No data to display';
-  }
+export function wrapTable(rows: Record<string, string | number>[]) {
   const head = Object.keys(rows[0]);
-
-  // Calculate widths based on content and terminal width
-  const defaultWidth = Math.floor(TERMINAL_MAX_WIDTH / head.length);
-  const colWidths = head.map((column) => columnWidths?.[column] || defaultWidth);
-
   const table = new Table({
     head,
-    colWidths,
+    colWidths: Array(head.length).fill(Math.floor(TERMINAL_MAX_WIDTH / head.length)),
     wordWrap: true,
     wrapOnWordBoundary: true,
   });
   for (const row of rows) {
     table.push(Object.values(row));
   }
-  return table.toString();
+  return table;
 }

@@ -1,3 +1,0 @@
-# Preserve the AnyIO fixes when upgrading an existing environment.
-anyio>=4.14.2,<5
-openai>=3.19.2,<4

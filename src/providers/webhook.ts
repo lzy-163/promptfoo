@@ -1,7 +1,7 @@
 import { fetchWithCache } from '../cache';
-import { getRequestTimeoutMs } from './shared';
-
-import type { ApiProvider, ProviderResponse } from '../types/index';
+import logger from '../logger';
+import type { ApiProvider, ProviderResponse } from '../types';
+import { REQUEST_TIMEOUT_MS } from './shared';
 
 export class WebhookProvider implements ApiProvider {
   webhookUrl: string;
@@ -30,15 +30,10 @@ export class WebhookProvider implements ApiProvider {
       params.config = this.config;
     }
 
-    interface WebhookResponse {
-      output?: string;
-    }
-
-    let data,
-      cached = false,
-      latencyMs: number | undefined;
+    logger.debug(`Calling Webhook: ${this.webhookUrl} with params: ${JSON.stringify(params)}`);
+    let response;
     try {
-      ({ data, cached, latencyMs } = await fetchWithCache<WebhookResponse>(
+      response = await fetchWithCache(
         this.webhookUrl,
         {
           method: 'POST',
@@ -47,24 +42,25 @@ export class WebhookProvider implements ApiProvider {
           },
           body: JSON.stringify(params),
         },
-        getRequestTimeoutMs(),
+        REQUEST_TIMEOUT_MS,
         'json',
-      ));
+      );
     } catch (err) {
       return {
         error: `Webhook call error: ${String(err)}`,
       };
     }
+    logger.debug(`\tWebhook response: ${JSON.stringify(response.data)}`);
 
-    if (data && typeof data.output === 'string') {
+    if (response.data && typeof response.data.output === 'string') {
       return {
-        output: data.output,
-        cached,
-        latencyMs,
+        output: response.data.output,
       };
     } else {
       return {
-        error: `Webhook response error: Unexpected response format: ${JSON.stringify(data)}`,
+        error: `Webhook response error: Unexpected response format: ${JSON.stringify(
+          response.data,
+        )}`,
       };
     }
   }

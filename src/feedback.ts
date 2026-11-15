@@ -1,91 +1,49 @@
-import chalk from 'chalk';
-import dedent from 'dedent';
-import { getUserEmail } from './globalConfig/accounts';
+import readline from 'readline';
+import { REMOTE_API_BASE_URL } from './constants';
+import { fetchWithProxy } from './fetch';
 import logger from './logger';
-import { fetchWithProxy } from './util/fetch/index';
-import { promptUser } from './util/readline';
 
-/**
- * Send feedback to the promptfoo API
- */
 export async function sendFeedback(feedback: string) {
-  if (!feedback.trim()) {
-    return;
-  }
+  const resp = await fetchWithProxy(`${REMOTE_API_BASE_URL}/api/feedback`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      message: feedback,
+    }),
+  });
 
-  try {
-    const resp = await fetchWithProxy('https://api.promptfoo.dev/api/feedback', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        message: feedback,
-      }),
-    });
-
-    if (resp.ok) {
-      logger.info(chalk.green('Feedback sent. Thank you!'));
-    } else {
-      logger.info(
-        chalk.yellow('Failed to send feedback. Please try again or open an issue on GitHub.'),
-      );
-    }
-  } catch {
-    logger.error('Network error while sending feedback');
+  if (resp.ok) {
+    logger.info('Feedback sent. Thank you!');
+  } else {
+    logger.info(
+      'Sorry, feedback failed to send for some reason. You can also open an issue at https://github.com/promptfoo/promptfoo/issues/new',
+    );
   }
 }
 
-/**
- * Gather and send user feedback
- */
-export async function gatherFeedback(message?: string) {
-  // If message is provided directly, send it without prompting
+export function gatherFeedback(message?: string) {
   if (message) {
-    await sendFeedback(message);
-    return;
-  }
+    sendFeedback(message);
+  } else {
+    const reader = readline.createInterface({
+      input: process.stdin,
+      output: process.stdout,
+    });
 
-  try {
-    // Get user email if logged in
-    const userEmail = getUserEmail();
+    reader.on('keypress', (str, key) => {
+      if (key.name === 'enter' && key.shift) {
+        reader.write('\n');
+      }
+    });
 
-    logger.info(chalk.blue.bold('\n📝 promptfoo Feedback'));
-    logger.info(chalk.dim('─'.repeat(40)));
-
-    // Get feedback message
-    const feedbackText = await promptUser(
-      dedent`
-      ${chalk.gray('Share your thoughts, bug reports, or feature requests:')}
-      ${chalk.bold('> ')}
-      `,
+    reader.question(
+      '\n\nPlease enter your feedback. Leave your email address if you want to hear back:\n\n> ',
+      (input: string) => {
+        reader.close();
+        sendFeedback(input);
+      },
     );
-
-    if (!feedbackText.trim()) {
-      logger.info(chalk.yellow('No feedback provided.'));
-      return;
-    }
-
-    // Get contact info if not logged in
-    let finalFeedback = feedbackText;
-    let contactInfo = '';
-
-    if (userEmail) {
-      contactInfo = userEmail;
-    } else {
-      const contactResponse = await promptUser(
-        chalk.gray("Email address (optional, if you'd like a response): "),
-      );
-      contactInfo = contactResponse.trim();
-    }
-
-    // Add contact info to feedback if provided
-    if (contactInfo) {
-      finalFeedback = `${feedbackText}\n\nContact: ${contactInfo}`;
-    }
-
-    await sendFeedback(finalFeedback);
-  } catch {
-    logger.error('Error gathering feedback');
   }
 }
