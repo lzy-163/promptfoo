@@ -1,17 +1,15 @@
 ---
-sidebar_label: Generic Webhook
-description: Configure webhook integrations to trigger custom LLM flows and prompt chains with HTTP POST requests, enabling seamless API-based testing and evaluation
+sidebar_position: 49
 ---
 
-# Generic Webhook
+# Generic webhook
 
 The webhook provider can be useful for triggering more complex flows or prompt chains end to end in your app.
 
 It is specified like so:
 
 ```yaml
-providers:
-  - webhook:http://example.com/webhook
+providers: [webhook:http://example.com/webhook]
 ```
 
 promptfoo will send an HTTP POST request with the following JSON payload:

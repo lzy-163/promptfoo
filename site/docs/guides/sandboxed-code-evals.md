@@ -1,8 +1,3 @@
----
-sidebar_label: Sandboxed Evaluations of LLM-Generated Code
-description: Safely evaluate and benchmark LLM-generated code in isolated Docker containers to prevent security risks and catch errors before production deployment
----
-
 # Sandboxed Evaluations of LLM-Generated Code
 
 You're using LLMs to generate code snippets, functions, or even entire programs. Blindly trusting and executing this generated code in our production environments - or even in development environments - can be a severe security risk.
@@ -20,23 +15,11 @@ In this tutorial, we'll use promptfoo to set up an automated pipeline for genera
 Make sure you have the following installed:
 
 - Node.js and npm
-- Python 3.10+
+- Python 3.9+
 - Docker
 - promptfoo (`npm install -g promptfoo`)
-
-On Windows, run this tutorial in WSL 2 with Docker Desktop’s WSL integration enabled. Install Node.js and Python inside WSL; native Windows Python is not supported by Epicbox.
-
-Create a virtual environment in your project directory and install the [example's Python requirements](https://github.com/promptfoo/promptfoo/blob/main/examples/integration-docker/code-generation-sandbox/requirements.txt).
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install -r https://raw.githubusercontent.com/promptfoo/promptfoo/main/examples/integration-docker/code-generation-sandbox/requirements.txt
-```
-
-Keep the virtual environment active in the same shell when running the evaluation.
-
-These use the official Epicbox 1.1.1 GitHub release, verified by a SHA-256 hash, and retain transport security minimums. Epicbox 1.1.0 on PyPI is incompatible with urllib3 2.
+- epicbox (`pip install epicbox`)
+- urllib3 < 2 (`pip install 'urllib3<2'`)
 
 Pull the Docker image you want to use so it is available locally. In this tutorial, we'll use a generic Python image, but you can use a custom one if you want:
 
@@ -51,11 +34,11 @@ docker pull python:3.9-alpine
 Create a file named `promptfooconfig.yaml`:
 
 ```yaml
-prompts: file://code_generation_prompt.txt
+prompts: code_generation_prompt.txt
 
 providers:
-  - openai:gpt-5
-  - ollama:chat:llama4:scout
+  - ollama:chat:llama3:70b
+  - openai:gpt-4o
 
 tests:
   - vars:
@@ -83,7 +66,7 @@ defaultTest:
 This configuration does several important things:
 
 1. It tells promptfoo to use our prompt template
-1. We're testing GPT-5 and Llama 4 (you can replace this with a [provider](/docs/providers) of your choice. Promptfoo supports both local and commercial providers).
+1. We're testing GPT-4o and Llama 3 (you can replace this with a [provider](/docs/providers) of your choice. Promptfoo supports both local and commercial providers).
 1. It defines coding problems. For each problem, it specifies the function name, a test input, and the expected output.
 1. It sets up a Python-based assertion that will run for each test case, validating the generated code.
 

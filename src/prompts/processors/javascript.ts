@@ -1,18 +1,15 @@
+import invariant from 'tiny-invariant';
 import { importModule } from '../../esm';
-import invariant from '../../util/invariant';
-
-import type { ApiProvider, Prompt, PromptFunctionContext, VarValue } from '../../types/index';
+import type { ApiProvider, Prompt, PromptFunctionContext } from '../../types';
 
 export const transformContext = (context: {
-  vars: Record<string, VarValue>;
+  vars: Record<string, string | object>;
   provider?: ApiProvider;
-  config?: Record<string, unknown>;
 }): PromptFunctionContext => {
   invariant(context.provider, 'Provider is required');
   return {
     vars: context.vars,
     provider: { id: context.provider.id(), label: context.provider.label },
-    config: context.config ?? {},
   };
 };
 
@@ -26,25 +23,13 @@ export async function processJsFile(
   filePath: string,
   prompt: Partial<Prompt>,
   functionName: string | undefined,
-  labelPath: string = filePath,
 ): Promise<Prompt[]> {
   const promptFunction = await importModule(filePath, functionName);
   return [
     {
       raw: String(promptFunction),
-      label: prompt.label
-        ? prompt.label
-        : functionName
-          ? `${labelPath}:${functionName}`
-          : labelPath,
-      function: (context) =>
-        promptFunction(
-          transformContext({
-            ...context,
-            config: prompt.config ?? {},
-          }),
-        ),
-      config: prompt.config ?? {},
+      label: prompt.label ? prompt.label : functionName ? `${filePath}:${functionName}` : filePath,
+      function: (context) => promptFunction(transformContext(context)),
     },
   ];
 }

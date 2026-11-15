@@ -1,103 +1,109 @@
-# syntax=docker/dockerfile:1
-FROM node:24.22.3-alpine AS base
+# https://github.com/vercel/next.js/blob/canary/examples/with-docker/Dockerfile
 
-# Update Alpine packages to get latest security patches
-RUN apk upgrade --no-cache
+# ---- Build ----
+ARG BUILDPLATFORM=linux/amd64
+FROM --platform=${BUILDPLATFORM} node:20-alpine AS builder
 
-RUN addgroup -S promptfoo && adduser -S promptfoo -G promptfoo
-# Python version pin. Empty by default so `apk` installs whatever python3 the
-# Alpine base ships — py3-pip/py3-setuptools depend on that exact minor, so any
-# fixed minor goes stale and makes `apk add` unsatisfiable when the base advances
-# (e.g. Alpine moving 3.12 -> 3.14 broke the release build). Self-hosters can pin a
-# specific minor for reproducibility with `--build-arg PYTHON_VERSION=3.14`.
-ARG PYTHON_VERSION=
+ARG NEXT_PUBLIC_PROMPTFOO_BASE_URL
+ENV NEXT_PUBLIC_PROMPTFOO_BASE_URL=${NEXT_PUBLIC_PROMPTFOO_BASE_URL}
+ENV NEXT_PUBLIC_PROMPTFOO_BUILD_STANDALONE_SERVER=1
+ENV NEXT_TELEMETRY_DISABLED=1
 
-# Install Python for python providers, prompts, asserts, etc. The `${VAR:+~=$VAR}`
-# expansion adds the `~=<minor>` constraint only when PYTHON_VERSION is set.
-RUN apk add --no-cache "python3${PYTHON_VERSION:+~=${PYTHON_VERSION}}" py3-pip py3-setuptools curl && \
-    ln -sf python3 /usr/bin/python
+# TODO(ian): Backwards compatibility, 2024-04-01
+ARG NEXT_PUBLIC_PROMPTFOO_REMOTE_API_BASE_URL
+ENV NEXT_PUBLIC_PROMPTFOO_REMOTE_API_BASE_URL=${NEXT_PUBLIC_PROMPTFOO_REMOTE_API_BASE_URL}
 
-# Install dependencies only when needed
-FROM base AS builder
-# Check https://github.com/nodejs/docker-node/tree/b4117f9333da4138b03a546ec926ef50a31506c3#nodealpine to understand why libc6-compat might be needed.
-RUN apk add --no-cache libc6-compat
+# Supabase opt-in
+ARG NEXT_PUBLIC_PROMPTFOO_USE_SUPABASE
+ENV NEXT_PUBLIC_PROMPTFOO_USE_SUPABASE=${NEXT_PUBLIC_PROMPTFOO_USE_SUPABASE}
+
+# These envars are not necessarily used, but must be set to prevent the build process from erroring.
+ENV NEXT_PUBLIC_SUPABASE_URL=http://placeholder.promptfoo.dev
+ENV NEXT_PUBLIC_SUPABASE_ANON_KEY=placeholder
+
 WORKDIR /app
-
-ARG VITE_PUBLIC_BASENAME
-ARG PROMPTFOO_REMOTE_API_BASE_URL
-
-# Set environment variables for the build
-ENV VITE_IS_HOSTED=1 \
-    VITE_TELEMETRY_DISABLED=1 \
-    VITE_PUBLIC_BASENAME=${VITE_PUBLIC_BASENAME} \
-    PROMPTFOO_REMOTE_API_BASE_URL=${PROMPTFOO_REMOTE_API_BASE_URL}
-
-# Install dependencies (deterministic + cached). Copy workspace package manifests
-# before npm ci so the root lockfile can install all workspaces reproducibly.
-COPY package.json package-lock.json ./
-COPY src/app/package.json ./src/app/package.json
-COPY site/package.json ./site/package.json
-# Block dependency lifecycle scripts during install, then rebuild only the esbuild
-# package the build needs. The specs must be exact directories: `npm rebuild esbuild`
-# matches every folder of that name anywhere in the tree, so a nested dependency aliased
-# to `esbuild` would get its install script run and defeat --ignore-scripts.
-# Leverage BuildKit cache
-RUN --mount=type=cache,target=/root/.npm \
-    npm ci --install-links --include=peer --ignore-scripts && \
-    npm rebuild ./node_modules/esbuild
-
-# Copy the rest of the application code
 COPY . .
 
-WORKDIR /app
+# Necessary for node-gyp deps
+RUN apk update && apk add --no-cache python3 build-base
+
+# Envars are read in from src/web/nextui/.env.production
+RUN echo "*** Building with env vars from .env.production"
+
+RUN npm install
 RUN npm run build
 
-# Install production dependencies separately so the runtime image excludes
-# the app and docs build tools. Keep optional native packages, peers, and tsx.
-FROM base AS production-deps
+WORKDIR /app/src/web/nextui
+RUN npm prune --omit=dev
+
+# ---- Final Stage ----
+ARG TARGETPLATFORM=linux/amd64
+FROM --platform=${TARGETPLATFORM} node:20-alpine
+
+LABEL org.opencontainers.image.source="https://github.com/promptfoo/promptfoo"
+LABEL org.opencontainers.image.description="promptfoo is a tool for testing evaluating and red-teaming LLM apps."
+LABEL org.opencontainers.image.licenses="MIT"
+
+ENV NEXT_TELEMETRY_DISABLED=1
+
 WORKDIR /app
-COPY package.json package-lock.json ./
-# npm omits packages declared as both dev and optional dependencies with --omit=dev.
-# Remove this stage's dev declarations to retain those SDKs. Keep the lockfile
-# unchanged and copy the original manifest from the builder into the final image.
-RUN --mount=type=cache,target=/root/.npm \
-    npm pkg delete devDependencies && \
-    npm ci --omit=dev --workspaces=false --install-links --include=peer --ignore-scripts && \
-    npm rebuild ./node_modules/esbuild
 
-FROM base AS server
-WORKDIR /app
-COPY --from=production-deps --chown=promptfoo:promptfoo /app/node_modules ./node_modules
-COPY --from=builder --chown=promptfoo:promptfoo /app/package.json ./package.json
-COPY --from=builder --chown=promptfoo:promptfoo /app/dist ./dist
+COPY --from=builder /app/src/web/nextui/public ./public
+COPY --from=builder /app/src/web/nextui/.next/standalone ./
+COPY --from=builder /app/src/web/nextui/.next/static ./src/web/nextui/.next/static
+COPY --from=builder /app/drizzle ./src/web/nextui/.next/server/drizzle
 
-RUN ln -s /app /app/node_modules/promptfoo && \
-    chown -h promptfoo:promptfoo /app/node_modules/promptfoo && \
-    ln -s /app/dist/src/entrypoint.js /usr/local/bin/promptfoo && \
-    ln -s /app/dist/src/entrypoint.js /usr/local/bin/pf && \
-    mkdir -p /home/promptfoo/.promptfoo && chown promptfoo:promptfoo /home/promptfoo/.promptfoo
+## build + install better-sqlite3
+## This is a kludge to get better-sqlite3 to work on mac M1
+## see: https://github.com/promptfoo/promptfoo/issues/1330
+ARG BSQL3_VERSION=v11.1.2
+RUN apk update && apk add --no-cache python3 build-base git && \
+    mkdir -p /tmp/build/ && \
+    cd /tmp/build/ && \
+    git clone https://github.com/WiseLibs/better-sqlite3.git && \
+    cd better-sqlite3 && git checkout $BSQL3_VERSION && \
+    cd /app && \
+    cp -r /tmp/build/better-sqlite3/* /app/node_modules/better-sqlite3/ && \
+    cd node_modules/better-sqlite3 && \
+    npm run build-release && \
+    rm -rf /tmp/build/ && \
+    apk del python3 build-base git
 
-# Alpine publishes fixes between rebuilds of the Node image, and the `apk upgrade` in the
-# base stage is replayed from the build cache until that image changes. A new value here
-# re-runs only this step, so the dependency and build layers stay cached. CI passes one
-# for every build.
-ARG OS_PACKAGE_REFRESH=
-RUN apk upgrade --no-cache
+RUN mkdir -p /root/.promptfoo/output
 
-ENV API_PORT=3000
-ENV HOST=0.0.0.0
-ENV PROMPTFOO_SELF_HOSTED=1
-ENV PROMPTFOO_RUNNING_IN_DOCKER=1
-ARG PROMPTFOO_OFFICIAL_DOCKER_IMAGE=0
-ENV PROMPTFOO_OFFICIAL_DOCKER_IMAGE=${PROMPTFOO_OFFICIAL_DOCKER_IMAGE}
-# pip installs CLIs such as modelaudit into the non-root user's script directory.
-ENV PATH="${PATH}:/home/promptfoo/.local/bin"
+# Permissions
+RUN addgroup -g 1001 -S nodejs
+RUN adduser -S nextjs -u 1001
+RUN mkdir -p /root/.promptfoo/output
+RUN chown -R nextjs:nodejs /app /root/.promptfoo
 
-USER promptfoo
+# Create the .env file directory with correct permissions
+RUN mkdir -p /app/src/web/nextui
+RUN chown nextjs:nodejs /app/src/web/nextui
+
+# Install curl for the healthcheck
+RUN apk add --no-cache curl sqlite-dev
+
+# Create a script to write environment variables to .env file
+RUN echo -e '#!/bin/sh\n\
+    echo "Writing environment variables to .env file..."\n\
+    env > /app/src/web/nextui/.env\n\
+    echo "Loaded environment variables:"\n\
+    cat /app/src/web/nextui/.env\n\
+    echo "Starting server..."\n\
+    node src/web/nextui/server.js' > entrypoint.sh
+
+# Make the script executable
+RUN chmod +x entrypoint.sh
+
+# Switch to non-root user
+USER nextjs
 
 EXPOSE 3000
 
-# Set up healthcheck using Node, which is present in every stage.
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s CMD node -e "const http = require('node:http'); const req = http.get('http://127.0.0.1:3000/health', (res) => process.exit(res.statusCode >= 200 && res.statusCode < 400 ? 0 : 1)); req.on('error', () => process.exit(1)); req.setTimeout(5000, () => { req.destroy(); process.exit(1); });"
+ENV PORT=3000
+ENV HOSTNAME="0.0.0.0"
 
-CMD ["node", "dist/src/server/index.js"]
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s CMD curl -f http://$HOSTNAME:$PORT || exit 1
+
+CMD ["sh", "entrypoint.sh"]

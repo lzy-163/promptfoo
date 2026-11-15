@@ -1,9 +1,11 @@
-# amazon-bedrock (Amazon Bedrock)
+To get started, set your `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` environment variables. You may also have to apply for access to the model that you want on Bedrock.
 
-Examples for using promptfoo with [Amazon Bedrock](https://aws.amazon.com/bedrock/).
+Next, change a few of the prompts in prompts.txt and edit promptfooconfig.yaml.
 
-## Examples
+Then run:
 
-- [models](./models/) - Model evaluations: Claude, Llama, Mistral, Nova, DeepSeek, Qwen, Grok, and more
-- [agents](./agents/) - Bedrock Agents with tool use and knowledge bases
-- [video](./video/) - Video generation with Luma Ray 2 and a historical Nova Reel configuration
+```
+promptfoo eval
+```
+
+Afterwards, you can view the results by running `promptfoo view`
