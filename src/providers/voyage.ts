@@ -1,33 +1,9 @@
 import { fetchWithCache } from '../cache';
-import { type EnvVarKey, getEnvString, getProviderEnvString } from '../envars';
 import logger from '../logger';
-import { resolveProviderEnv } from './env';
-import { getRequestTimeoutMs } from './shared';
-
-import type {
-  ApiEmbeddingProvider,
-  CallApiContextParams,
-  CallApiOptionsParams,
-  ProviderEmbeddingResponse,
-  ProviderResponse,
-} from '../types/index';
-
-function formatVoyageApiError(status: number, statusText: string, data: any): string {
-  const responseText =
-    typeof data === 'string'
-      ? data
-      : typeof data?.error === 'string'
-        ? data.error
-        : typeof data?.error?.message === 'string'
-          ? data.error.message
-          : JSON.stringify(data);
-  const errorPrefix = status === 429 ? 'Voyage API rate limit exceeded' : 'Voyage API error';
-  return `${errorPrefix}: ${status} ${statusText || 'Unknown error'}\n${responseText}`;
-}
+import type { ApiEmbeddingProvider, ProviderResponse, ProviderEmbeddingResponse } from '../types';
+import { REQUEST_TIMEOUT_MS } from './shared';
 
 export class VoyageEmbeddingProvider implements ApiEmbeddingProvider {
-  readonly supportsEmbeddingCancellation = true;
-
   modelName: string;
   config: any;
   env?: any;
@@ -42,28 +18,20 @@ export class VoyageEmbeddingProvider implements ApiEmbeddingProvider {
     return `voyage:${this.modelName}`;
   }
 
-  requiresApiKey(): boolean {
-    return true;
-  }
-
   getApiKey(): string | undefined {
-    const namedKey = this.config.apiKeyEnvar
-      ? (getProviderEnvString(this.env, this.config.apiKeyEnvar) ??
-        getEnvString(this.config.apiKeyEnvar as EnvVarKey))
-      : undefined;
     return (
       this.config.apiKey ||
-      (namedKey ??
-        getProviderEnvString(this.env, 'VOYAGE_API_KEY') ??
-        getEnvString('VOYAGE_API_KEY'))
+      (this.config?.apiKeyEnvar
+        ? process.env[this.config.apiKeyEnvar] || this.env?.[this.config.apiKeyEnvar as keyof any]
+        : undefined) ||
+      this.env?.VOYAGE_API_KEY ||
+      process.env.VOYAGE_API_KEY
     );
   }
 
   getApiUrl(): string {
     return (
-      this.config.apiBaseUrl ||
-      resolveProviderEnv(this.env, ['VOYAGE_API_BASE_URL'])?.value ||
-      'https://api.voyageai.com/v1'
+      this.config.apiBaseUrl || process.env.VOYAGE_API_BASE_URL || 'https://api.voyageai.com/v1'
     );
   }
 
@@ -71,11 +39,7 @@ export class VoyageEmbeddingProvider implements ApiEmbeddingProvider {
     throw new Error('Voyage API does not provide text inference.');
   }
 
-  async callEmbeddingApi(
-    input: string,
-    _context?: CallApiContextParams,
-    options?: CallApiOptionsParams,
-  ): Promise<ProviderEmbeddingResponse> {
+  async callEmbeddingApi(input: string): Promise<ProviderEmbeddingResponse> {
     if (!this.getApiKey()) {
       throw new Error('Voyage API key must be set for similarity comparison');
     }
@@ -86,12 +50,9 @@ export class VoyageEmbeddingProvider implements ApiEmbeddingProvider {
     };
 
     let data,
-      cached = false,
-      status: number | undefined,
-      statusText = '',
-      latencyMs: number | undefined;
+      cached = false;
     try {
-      ({ data, cached, status, statusText, latencyMs } = (await fetchWithCache(
+      ({ data, cached } = (await fetchWithCache(
         `${this.getApiUrl()}/embeddings`,
         {
           method: 'POST',
@@ -101,21 +62,14 @@ export class VoyageEmbeddingProvider implements ApiEmbeddingProvider {
             ...this.config.headers,
           },
           body: JSON.stringify(body),
-          ...(options?.abortSignal && { signal: options.abortSignal }),
         },
-        getRequestTimeoutMs(),
+        REQUEST_TIMEOUT_MS,
       )) as unknown as any);
     } catch (err) {
-      options?.abortSignal?.throwIfAborted();
       logger.error(`API call error: ${err}`);
       throw err;
     }
-
-    if (status !== undefined && (status < 200 || status >= 300)) {
-      const errorMessage = formatVoyageApiError(status, statusText, data);
-      logger.error(errorMessage);
-      throw new Error(errorMessage);
-    }
+    logger.debug(`\tVoyage embeddings API response: ${JSON.stringify(data)}`);
 
     try {
       const embedding = data?.data?.[0]?.embedding;
@@ -124,15 +78,12 @@ export class VoyageEmbeddingProvider implements ApiEmbeddingProvider {
       }
       return {
         embedding,
-        cached,
-        latencyMs,
         tokenUsage: {
-          total: data?.usage?.total_tokens,
-          numRequests: 1,
+          total: data.usage.total_tokens,
         },
       };
     } catch (err) {
-      logger.error(typeof data?.error?.message === 'string' ? data.error.message : String(err));
+      logger.error(data.error.message);
       throw err;
     }
   }

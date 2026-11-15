@@ -1,6 +1,5 @@
-import { getEnvString } from '../envars';
-import { fetchWithProxy } from '../util/fetch/index';
-import invariant from '../util/invariant';
+import fetch from 'node-fetch';
+import invariant from 'tiny-invariant';
 
 interface PortkeyResponse {
   success: boolean;
@@ -21,17 +20,16 @@ interface PortkeyResponse {
 
 export async function getPrompt(
   id: string,
-  variables: Record<string, unknown>,
+  variables: Record<string, any>,
 ): Promise<PortkeyResponse['data']> {
-  const apiKey = getEnvString('PORTKEY_API_KEY');
-  invariant(apiKey, 'PORTKEY_API_KEY is required');
+  invariant(process.env.PORTKEY_API_KEY, 'PORTKEY_API_KEY is required');
 
   const url = `https://api.portkey.ai/v1/prompts/${id}/render`;
-  const response = await fetchWithProxy(url, {
+  const response = await fetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'x-portkey-api-key': apiKey,
+      'x-portkey-api-key': process.env.PORTKEY_API_KEY,
     },
     body: JSON.stringify({ variables }),
   });

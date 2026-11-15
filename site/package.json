@@ -4,71 +4,37 @@
   "license": "MIT",
   "scripts": {
     "docusaurus": "docusaurus",
-    "fetch-stats": "node scripts/fetch-stats.mjs",
-    "ensure-stats": "node -e \"const f='src/.generated-stats.json';require('fs').existsSync(f)||require('fs').writeFileSync(f,'{}\\n')\"",
-    "postinstall": "npm run ensure-stats",
-    "prestart": "npm run fetch-stats",
-    "start": "NODE_ENV=development docusaurus start --port ${PORT:-3100}",
-    "prebuild": "npm run fetch-stats",
+    "start": "docusaurus start",
     "build": "docusaurus build",
     "swizzle": "docusaurus swizzle",
     "deploy": "docusaurus deploy",
     "clear": "docusaurus clear",
-    "serve": "docusaurus serve --port ${PORT:-3100}",
+    "serve": "docusaurus serve",
     "write-translations": "docusaurus write-translations",
     "write-heading-ids": "docusaurus write-heading-ids",
     "typecheck": "tsc",
-    "format": "prettier --ignore-path .gitignore -w .",
-    "test": "vitest run",
-    "test:browser": "vitest run --config vitest.browser.config.ts",
-    "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage"
+    "format": "prettier --ignore-path .gitignore -w ."
+  },
+  "dependencies": {
+    "@calcom/embed-react": "^1.5.0",
+    "@docusaurus/core": "^3.4.0",
+    "@docusaurus/plugin-google-gtag": "^3.4.0",
+    "@docusaurus/preset-classic": "^3.4.0",
+    "@docusaurus/theme-search-algolia": "^3.4.0",
+    "@mdx-js/react": "^3.0.1",
+    "@monaco-editor/react": "^4.6.0",
+    "@mui/icons-material": "^5.16.4",
+    "@segment/ajv-human-errors": "^2.13.0",
+    "clsx": "^2.1.1",
+    "docusaurus-plugin-image-zoom": "^2.0.0",
+    "prism-react-renderer": "^2.3.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
   },
   "devDependencies": {
-    "@docusaurus/core": "^3.9.2",
-    "@docusaurus/module-type-aliases": "^3.9.2",
-    "@docusaurus/plugin-client-redirects": "^3.9.2",
-    "@docusaurus/plugin-content-blog": "^3.9.2",
-    "@docusaurus/plugin-content-docs": "^3.9.2",
-    "@docusaurus/preset-classic": "^3.9.2",
-    "@docusaurus/theme-common": "^3.9.2",
-    "@docusaurus/theme-mermaid": "^3.9.2",
-    "@docusaurus/types": "^3.9.2",
-    "@mdx-js/react": "^3.1.1",
-    "@monaco-editor/react": "^4.7.0",
-    "@mui/icons-material": "^9.0.0",
-    "@segment/ajv-human-errors": "^2.16.0",
-    "@testing-library/dom": "^10.4.1",
-    "@testing-library/jest-dom": "^7.0.0",
-    "@testing-library/react": "^16.3.2",
-    "@testing-library/user-event": "^14.6.1",
-    "@vitejs/plugin-react": "^6.0.1",
-    "@vitest/browser-playwright": "^5.0.2",
-    "@vitest/coverage-v8": "^5.0.2",
-    "ajv": "^8.18.0",
-    "canvas-confetti": "^1.9.4",
-    "clsx": "^2.1.1",
-    "dedent": "^1.7.2",
-    "docusaurus-plugin-image-zoom": "^3.0.1",
-    "gray-matter": "^4.0.3",
-    "jsdom": "^29.0.0",
-    "lucide-react": "^1.0.0",
-    "monaco-editor": "0.57.0",
-    "motion": "^12.34.3",
-    "prism-react-renderer": "^2.4.1",
-    "prismjs": "^1.30.0",
-    "react": "^19.3.0",
-    "react-dom": "^19.3.0",
-    "satori": "^0.63.0",
-    "typescript": "^7.0.0",
-    "vitest": "^5.0.2",
-    "webpack": "5.112.2"
-  },
-  "optionalDependencies": {
-    "sharp": "^0.35.5"
-  },
-  "overrides": {
-    "lodash-es": "^4.18.1"
+    "@docusaurus/module-type-aliases": "^3.4.0",
+    "@tsconfig/docusaurus": "^2.0.3",
+    "typescript": "^5.5.4"
   },
   "browserslist": {
     "production": [
@@ -83,17 +49,6 @@
     ]
   },
   "engines": {
-    "node": ">=22.22.0"
-  },
-  "dependencies": {
-    "@emotion/react": "^11.14.0",
-    "@emotion/styled": "^11.14.1",
-    "@mui/material": "^9.0.0",
-    "@types/react": "19.3.0",
-    "@types/react-dom": "19.3.0",
-    "dompurify": "^3.4.17",
-    "js-yaml": "5.5.0",
-    "react-turnstile": "^1.1.5",
-    "swiper": "^14.0.0"
+    "node": ">=18"
   }
 }

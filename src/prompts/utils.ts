@@ -1,7 +1,5 @@
+import type { Prompt } from '../types';
 import { VALID_FILE_EXTENSIONS } from './constants';
-import { generateIdFromPrompt } from './id';
-
-import type { Prompt } from '../types/index';
 
 /**
  * Determines if a string is a valid file path.
@@ -13,16 +11,18 @@ export function maybeFilePath(str: string): boolean {
     throw new Error(`Invalid input: ${JSON.stringify(str)}`);
   }
 
-  const forbiddenSubstrings = ['\n', 'portkey://', 'langfuse://', 'helicone://'];
+  const forbiddenSubstrings = ['\n', 'portkey://', 'langfuse://'];
   if (forbiddenSubstrings.some((substring) => str.includes(substring))) {
     return false;
   }
 
-  // An extension can end the string or precede the last colon in a reference like prompts.py:generate.
-  const lastColon = str.lastIndexOf(':');
   return (
     str.startsWith('file://') ||
-    VALID_FILE_EXTENSIONS.some((ext) => str.endsWith(ext) || str.endsWith(ext, lastColon)) ||
+    VALID_FILE_EXTENSIONS.some((ext) => {
+      const tokens = str.split(':'); // str may be file.js:functionName
+      // Checks if the second to last token or the last token ends with the extension
+      return tokens.pop()?.endsWith(ext) || tokens.pop()?.endsWith(ext);
+    }) ||
     str.charAt(str.length - 3) === '.' ||
     str.charAt(str.length - 4) === '.' ||
     str.includes('*') ||
@@ -55,7 +55,7 @@ export function normalizeInput(
     ];
   }
   if (Array.isArray(promptPathOrGlobs)) {
-    return promptPathOrGlobs.map((promptPathOrGlob, _index) => {
+    return promptPathOrGlobs.map((promptPathOrGlob, index) => {
       if (typeof promptPathOrGlob === 'string') {
         return {
           raw: promptPathOrGlob,
@@ -77,20 +77,9 @@ export function normalizeInput(
       */
     return Object.entries(promptPathOrGlobs).map(([raw, key]) => ({
       label: key,
-      raw,
+      raw: raw,
     }));
   }
   // numbers, booleans, etc
   throw new Error(`Invalid input prompt: ${JSON.stringify(promptPathOrGlobs)}`);
-}
-
-/**
- * Generates a hash identifier for a prompt.
- * This is an alias for generateIdFromPrompt for backward compatibility.
- *
- * @param prompt - The prompt to hash
- * @returns A SHA-256 hash string
- */
-export function hashPrompt(prompt: Prompt): string {
-  return generateIdFromPrompt(prompt);
 }

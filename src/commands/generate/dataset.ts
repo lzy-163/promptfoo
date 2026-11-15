@@ -1,18 +1,14 @@
-import fs from 'fs/promises';
-
 import chalk from 'chalk';
-import * as yaml from 'js-yaml';
+import type { Command } from 'commander';
+import * as fs from 'fs';
+import yaml from 'js-yaml';
 import { disableCache } from '../../cache';
-import { serializeObjectArrayAsCSV } from '../../csv';
+import { resolveConfigs } from '../../config';
 import logger from '../../logger';
 import telemetry from '../../telemetry';
-import { synthesizeFromTestSuite } from '../../testCase/synthesis';
-import { type TestSuite, type UnifiedConfig } from '../../types/index';
-import { resolveConfigs } from '../../util/config/load';
-import { printBorder, setupEnv } from '../../util/index';
-import { promptfooCommand } from '../../util/promptfooCommand';
-import { loadYaml } from '../../util/yamlLoad';
-import type { Command } from 'commander';
+import { synthesizeFromTestSuite } from '../../testCases';
+import type { TestSuite, UnifiedConfig } from '../../types';
+import { printBorder, setupEnv } from '../../util';
 
 interface DatasetGenerateOptions {
   cache: boolean;
@@ -28,7 +24,7 @@ interface DatasetGenerateOptions {
   defaultConfigPath: string | undefined;
 }
 
-export async function doGenerateDataset(options: DatasetGenerateOptions): Promise<void> {
+async function doGenerateDataset(options: DatasetGenerateOptions): Promise<void> {
   setupEnv(options.envFile);
   if (!options.cache) {
     logger.info('Cache is disabled.');
@@ -43,15 +39,10 @@ export async function doGenerateDataset(options: DatasetGenerateOptions): Promis
         config: [configPath],
       },
       options.defaultConfig,
-      'DatasetGeneration',
     );
     testSuite = resolved.testSuite;
   } else {
-    throw new Error(
-      `Could not find a config file. Pass --config path/to/promptfooconfig.yaml or run "${promptfooCommand(
-        'init',
-      )}" to create one.`,
-    );
+    throw new Error('Could not find config file. Please use `--config`');
   }
 
   const startTime = Date.now();
@@ -60,24 +51,18 @@ export async function doGenerateDataset(options: DatasetGenerateOptions): Promis
     numPrompts: testSuite.prompts.length,
     numTestsExisting: (testSuite.tests || []).length,
   });
+  await telemetry.send();
 
   const results = await synthesizeFromTestSuite(testSuite, {
     instructions: options.instructions,
-    numPersonas: Number.parseInt(options.numPersonas, 10),
-    numTestCasesPerPersona: Number.parseInt(options.numTestCasesPerPersona, 10),
+    numPersonas: parseInt(options.numPersonas, 10),
+    numTestCasesPerPersona: parseInt(options.numTestCasesPerPersona, 10),
     provider: options.provider,
   });
   const configAddition = { tests: results.map((result) => ({ vars: result })) };
   const yamlString = yaml.dump(configAddition);
   if (options.output) {
-    // Should the output be written as a YAML or CSV?
-    if (options.output.endsWith('.csv')) {
-      await fs.writeFile(options.output, serializeObjectArrayAsCSV(results));
-    } else if (options.output.endsWith('.yaml')) {
-      await fs.writeFile(options.output, yamlString);
-    } else {
-      throw new Error(`Unsupported output file type: ${options.output}`);
-    }
+    fs.writeFileSync(options.output, yamlString);
     printBorder();
     logger.info(`Wrote ${results.length} new test cases to ${options.output}`);
     printBorder();
@@ -90,22 +75,11 @@ export async function doGenerateDataset(options: DatasetGenerateOptions): Promis
 
   printBorder();
   if (options.write && configPath) {
-    const existingConfig = loadYaml(
-      await fs.readFile(configPath, 'utf8'),
-    ) as Partial<UnifiedConfig>;
-    // Handle the union type for tests (string | TestGeneratorConfig | Array<...>)
-    const existingTests = existingConfig.tests;
-    let testsArray: any[] = [];
-    if (Array.isArray(existingTests)) {
-      testsArray = existingTests;
-    } else if (existingTests) {
-      testsArray = [existingTests];
-    }
-    existingConfig.tests = [...testsArray, ...configAddition.tests];
-    await fs.writeFile(configPath, yaml.dump(existingConfig));
+    const existingConfig = yaml.load(fs.readFileSync(configPath, 'utf8')) as Partial<UnifiedConfig>;
+    existingConfig.tests = [...(existingConfig.tests || []), ...configAddition.tests];
+    fs.writeFileSync(configPath, yaml.dump(existingConfig));
     logger.info(`Wrote ${results.length} new test cases to ${configPath}`);
-    const runCommand = promptfooCommand('eval');
-    logger.info(chalk.green(`Run ${chalk.bold(runCommand)} to run the generated tests`));
+    logger.info(chalk.green(`Run ${chalk.bold('promptfoo eval')} to run the generated tests`));
   } else {
     logger.info(
       `Copy the above test cases or run ${chalk.greenBright(
@@ -122,6 +96,7 @@ export async function doGenerateDataset(options: DatasetGenerateOptions): Promis
     numTestsGenerated: results.length,
     provider: options.provider || 'default',
   });
+  await telemetry.send();
 }
 
 export function generateDatasetCommand(
@@ -137,7 +112,7 @@ export function generateDatasetCommand(
       'Additional instructions to follow while generating test cases',
     )
     .option('-c, --config [path]', 'Path to configuration file. Defaults to promptfooconfig.yaml')
-    .option('-o, --output [path]', 'Path to output file. Supports CSV and YAML output.')
+    .option('-o, --output [path]', 'Path to output file')
     .option('-w, --write', 'Write results to promptfoo configuration file')
     .option(
       '--provider <provider>',
@@ -146,6 +121,6 @@ export function generateDatasetCommand(
     .option('--numPersonas <number>', 'Number of personas to generate', '5')
     .option('--numTestCasesPerPersona <number>', 'Number of test cases per persona', '3')
     .option('--no-cache', 'Do not read or write results to disk cache', false)
-    .option('--env-file, --env-path <path>', 'Path to .env file')
+    .option('--env-file <path>', 'Path to .env file')
     .action((opts) => doGenerateDataset({ ...opts, defaultConfig, defaultConfigPath }));
 }

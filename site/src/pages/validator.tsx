@@ -1,23 +1,22 @@
-import React, { useEffect, useState } from 'react';
-
-import Link from '@docusaurus/Link';
 import { Editor } from '@monaco-editor/react';
+import React, { useState, useEffect } from 'react';
+import Link from '@docusaurus/Link';
 import Box from '@mui/material/Box';
 import Container from '@mui/material/Container';
 import Grid from '@mui/material/Grid';
 import Paper from '@mui/material/Paper';
 import Typography from '@mui/material/Typography';
 import { AggregateAjvError } from '@segment/ajv-human-errors';
-import { loadYaml } from '@site/src/utils/yaml';
 import Layout from '@theme/Layout';
 import Ajv from 'ajv';
+import yaml from 'js-yaml';
 
 const DEFAULT_INPUT = `prompts:
   - "Write a tweet about {{topic}}"
 
 providers:
-  - openai:chat:gpt-4.1-mini
-  - anthropic:messages:claude-sonnet-4-6
+  - openai:chat:gpt-4o-mini
+  - anthropic:messages:claude-3-5-sonnet-20240620
 
 tests:
   - vars:
@@ -40,7 +39,7 @@ defaultTest:
 const ConfigValidator = () => {
   const [input, setInput] = useState(DEFAULT_INPUT);
   const [validationOutput, setValidationOutput] = useState('Configuration is valid');
-  const [schema, setSchema] = useState<object | null>(null);
+  const [schema, setSchema] = useState(null);
 
   useEffect(() => {
     fetch('/config-schema.json')
@@ -49,7 +48,7 @@ const ConfigValidator = () => {
       .catch((error) => console.error('Error loading schema:', error));
   }, []);
 
-  const validateConfig = (value: string) => {
+  const validateConfig = (value) => {
     if (!schema) {
       setValidationOutput('Schema not loaded yet.');
       return;
@@ -60,7 +59,7 @@ const ConfigValidator = () => {
       if (value.trim().startsWith('{')) {
         parsedConfig = JSON.parse(value);
       } else {
-        parsedConfig = loadYaml(value);
+        parsedConfig = yaml.load(value);
       }
 
       const ajv = new Ajv({
@@ -70,7 +69,7 @@ const ConfigValidator = () => {
 
       ajv.validate(schema, parsedConfig);
 
-      const errors = new AggregateAjvError(ajv.errors ?? []);
+      const errors = new AggregateAjvError(ajv.errors);
       const errorsByPath: Record<string, string[]> = {};
 
       for (const error of Array.from(errors)) {
@@ -101,23 +100,20 @@ const ConfigValidator = () => {
         setValidationOutput(output.trim());
       }
     } catch (error) {
-      setValidationOutput(
-        `Error parsing input: ${error instanceof Error ? error.message : String(error)}`,
-      );
+      setValidationOutput(`Error parsing input: ${error.message}`);
     }
   };
 
-  const handleEditorChange = (value?: string) => {
-    const nextValue = value ?? '';
-    setInput(nextValue);
-    validateConfig(nextValue);
+  const handleEditorChange = (value) => {
+    setInput(value);
+    validateConfig(value);
   };
 
   return (
     <Layout title="Config Validator" description="Validate your promptfoo configuration">
       <Container maxWidth="lg" sx={{ mb: 4 }}>
         <Box sx={{ my: 4 }}>
-          <Typography variant="h3" component="h1" gutterBottom align="center">
+          <Typography variant="h3" gutterBottom align="center">
             Promptfoo Config Validator
           </Typography>
           <Typography variant="body1" gutterBottom align="center">
@@ -129,7 +125,7 @@ const ConfigValidator = () => {
           </Typography>
         </Box>
         <Grid container spacing={3}>
-          <Grid size={{ xs: 12, md: 6 }}>
+          <Grid item xs={12} md={6}>
             <Paper elevation={3} sx={{ height: '80vh' }}>
               <Editor
                 height="100%"
@@ -140,7 +136,7 @@ const ConfigValidator = () => {
               />
             </Paper>
           </Grid>
-          <Grid size={{ xs: 12, md: 6 }}>
+          <Grid item xs={12} md={6}>
             <Paper elevation={3} sx={{ height: '80vh', p: 2, overflow: 'auto' }}>
               <pre style={{ whiteSpace: 'pre-wrap', wordWrap: 'break-word' }}>
                 {validationOutput}

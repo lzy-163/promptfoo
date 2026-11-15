@@ -1,43 +1,20 @@
 ---
-title: 'Automated Jailbreaking Techniques with DALL-E: Complete Red Team Guide'
-description: 'We automated DALL-E jailbreaking and generated disturbing images that bypass safety filters. See the techniques and why image model security matters.'
 image: https://storage.googleapis.com/promptfoo-public-1/promptfoo.dev/blog/jailbreak-dalle/gallery-blurred.png
-keywords:
-  [
-    DALL-E jailbreak,
-    image model security,
-    AI image generation,
-    automated jailbreaking,
-    visual AI security,
-    image model red teaming,
-    AI safety,
-    prompt injection,
-  ]
 ian_comment: 'images here: https://console.cloud.google.com/storage/browser/promptfoo-public-1/promptfoo.dev/blog/jailbreak-dalle;tab=objects?project=promptfoo&prefix=&forceOnObjectsSortingFiltering=false'
 date: 2024-07-01
-authors: [ian]
-tags: [security-vulnerability, case-study, openai]
 ---
 
 import ImageJailbreakPreview from '@site/src/components/ImageJailbreakPreview';
 
 # Automated jailbreaking techniques with Dall-E
 
-:::note Historical post
-
-This post preserves results and instructions from 2024. OpenAI [retired DALL·E 2 and DALL·E 3](https://developers.openai.com/api/docs/deprecations) on May 12, 2026. The quickstart below is no longer runnable against OpenAI. The `redteam-dalle` download is retained only as a historical reference. See the [current OpenAI image models](/docs/providers/openai#generating-images) for new evals.
-
-:::
-
-We all know that image models like OpenAI's Dall-E can be jailbroken to generate violent, disturbing, and offensive images. It turns out this process can be fully automated.
+We all know that image models like OpenAI’s Dall-E can be jailbroken to generate violent, disturbing, and offensive images. It turns out this process can be fully automated.
 
 This post shows how to automatically discover one-shot jailbreaks with open-source [LLM red teaming](/docs/red-team) and includes a collection of examples.
 
 <a href="#images">
   <img src="https://storage.googleapis.com/promptfoo-public-1/promptfoo.dev/blog/jailbreak-dalle/gallery-blurred.png" alt="llm image red teaming" />
 </a>
-
-<!-- truncate -->
 
 ## How it works
 
@@ -281,24 +258,6 @@ See the [getting started](/docs/red-team) instructions for general LLM red teami
 
 ### Dall-E jailbreak quickstart
 
-Want to reproduce the examples shown above? The easiest way to get started is to use our example template, which includes the test cases from this blog post:
-
-```sh
-# Initialize the example project
-npx promptfoo@latest init --example redteam-dalle
-
-# Set your OpenAI API key
-export OPENAI_API_KEY=your_key_here
-
-# Run the evaluation
-npx promptfoo@latest eval
-
-# View results in the web UI
-npx promptfoo@latest view
-```
-
-Alternatively, you can set it up manually:
-
 Start by initializing the promptfoo CLI:
 
 ```
@@ -325,7 +284,7 @@ tests:
   # ...
 ```
 
-If you'd like, you can copy the [example Dall-E red team configuration](https://github.com/promptfoo/promptfoo/blob/31b566872971532e6d428c0cbad4487d22d936c5/examples/redteam-dalle/promptfooconfig.yaml).
+If you'd like, you can copy the [example Dall-E red team configuration](https://github.com/promptfoo/promptfoo/blob/main/examples/redteam-dalle/promptfooconfig.yaml).
 
 Then run:
 
@@ -370,5 +329,3 @@ With images, it's very hard to toe the line between easily generating disturbing
 Dall-E is already a bit dated and I'm sure OpenAI's future efforts will be more difficult to jailbreak. Also, worth acknowledging that I didn't spend much time on NSFW jailbreaks, but they seem to be much more difficult presumably because certain types of NSFW are criminalized.
 
 Check out promptfoo's [red team](/docs/red-team) to run tests on your own app with image or text.
-
-<!-- truncate -->

@@ -1,222 +1,80 @@
 import * as fs from 'fs';
+import yaml from 'js-yaml';
+import { readGlobalConfig, resetGlobalConfig, maybeRecordFirstRun } from '../src/globalConfig';
 
-import * as yaml from 'js-yaml';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-
-import type {
-  readGlobalConfig,
-  writeGlobalConfig,
-  writeGlobalConfigPartial,
-} from '../src/globalConfig/globalConfig';
-
-// Helper function to validate UUID format
-function isValidUUID(uuid: string): boolean {
-  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-  return uuidRegex.test(uuid);
-}
-
-vi.mock('fs', () => ({
-  readFileSync: vi.fn(),
-  writeFileSync: vi.fn(),
-  openSync: vi.fn(() => 123),
-  closeSync: vi.fn(),
-  fstatSync: vi.fn(() => ({ mode: 0o600 })),
-  fchmodSync: vi.fn(),
-  renameSync: vi.fn(),
-  rmSync: vi.fn(),
-  lstatSync: vi.fn(),
-  statSync: vi.fn(),
-  readdirSync: vi.fn(),
-  existsSync: vi.fn(),
-  mkdirSync: vi.fn(),
+jest.mock('fs', () => ({
+  readFileSync: jest.fn(),
+  writeFileSync: jest.fn(),
+  statSync: jest.fn(),
+  readdirSync: jest.fn(),
+  existsSync: jest.fn(),
+  mkdirSync: jest.fn(),
 }));
 
-vi.mock('proxy-agent', () => ({
-  ProxyAgent: vi.fn().mockImplementation(() => ({})),
+jest.mock('proxy-agent', () => ({
+  ProxyAgent: jest.fn().mockImplementation(() => ({})),
 }));
 
-vi.mock('glob', () => ({
-  globSync: vi.fn(),
+jest.mock('glob', () => ({
+  globSync: jest.fn(),
 }));
 
-vi.mock('../src/database');
+jest.mock('../src/database');
 
-describe('Global Config', () => {
-  let globalConfig: {
-    readGlobalConfig: typeof readGlobalConfig;
-    writeGlobalConfig: typeof writeGlobalConfig;
-    writeGlobalConfigPartial: typeof writeGlobalConfigPartial;
-  };
-
-  beforeEach(async () => {
-    vi.clearAllMocks();
-    vi.resetModules();
-    globalConfig = await import('../src/globalConfig/globalConfig');
+describe('readCliConfig', () => {
+  afterEach(() => {
+    jest.clearAllMocks();
+    resetGlobalConfig();
   });
 
-  const mockConfig = { id: 'test-id', account: { email: 'test@example.com' } };
+  it('reads from existing config', () => {
+    const config = { hasRun: false };
+    jest.mocked(fs.existsSync).mockReturnValue(true);
+    jest.mocked(fs.readFileSync).mockReturnValue(yaml.dump(config));
 
-  describe('readGlobalConfig', () => {
-    describe('when config file exists', () => {
-      beforeEach(() => {
-        vi.mocked(fs.existsSync).mockImplementation(
-          (path) =>
-            path.toString().includes('promptfoo.yaml') || path.toString().includes('.promptfoo'),
-        );
-        vi.mocked(fs.readFileSync).mockReturnValue(yaml.dump(mockConfig));
-      });
+    const result = readGlobalConfig();
 
-      it('should read and parse the existing config file', () => {
-        const result = globalConfig.readGlobalConfig();
-        expect(fs.readFileSync).toHaveBeenCalledWith(123, 'utf-8');
-        expect(result).toEqual(mockConfig);
-      });
-
-      it('should handle empty config file by returning config with generated ID', () => {
-        vi.mocked(fs.readFileSync).mockReturnValue('');
-
-        const result = globalConfig.readGlobalConfig();
-
-        expect(result).toEqual({ id: expect.any(String) });
-        expect(result.id).toBeDefined();
-        expect(typeof result.id).toBe('string');
-        expect(isValidUUID(result.id!)).toBe(true);
-      });
-
-      it('should generate and save ID when existing config lacks an ID', () => {
-        const configWithoutId = { account: { email: 'test@example.com' } };
-        vi.mocked(fs.readFileSync).mockReturnValue(yaml.dump(configWithoutId));
-        vi.mocked(fs.writeFileSync).mockImplementation(() => {});
-
-        const result = globalConfig.readGlobalConfig();
-
-        expect(result.id).toBeDefined();
-        expect(typeof result.id).toBe('string');
-        expect(isValidUUID(result.id!)).toBe(true);
-        expect(result.account).toEqual(configWithoutId.account);
-        // Should have written the config with the new ID
-        expect(fs.writeFileSync).toHaveBeenCalledWith(
-          expect.stringContaining('promptfoo.yaml'),
-          expect.stringContaining(`id: ${result.id}`),
-          expect.objectContaining({ mode: 0o600 }),
-        );
-      });
-    });
-
-    describe('when config file does not exist', () => {
-      beforeEach(() => {
-        vi.mocked(fs.existsSync).mockReturnValue(false);
-        vi.mocked(fs.writeFileSync).mockImplementation(() => {});
-        vi.mocked(fs.mkdirSync).mockImplementation(() => undefined);
-      });
-
-      it('should create new config directory and file with generated UUID', () => {
-        const result = globalConfig.readGlobalConfig();
-
-        expect(fs.existsSync).toHaveBeenCalledTimes(1);
-        expect(fs.writeFileSync).toHaveBeenCalledTimes(1);
-        expect(fs.writeFileSync).toHaveBeenCalledWith(
-          expect.stringContaining('promptfoo.yaml'),
-          expect.any(String),
-          expect.objectContaining({ mode: 0o600 }),
-        );
-        expect(result).toEqual({ id: expect.any(String) });
-        expect(result.id).toBeDefined();
-        expect(typeof result.id).toBe('string');
-        expect(isValidUUID(result.id!)).toBe(true);
-      });
-    });
-
-    describe('error handling', () => {
-      it('can read a credential mounted read-only', () => {
-        vi.mocked(fs.existsSync).mockReturnValue(true);
-        const config = { ...mockConfig, cloud: { apiKey: 'fixture-key' } };
-        vi.mocked(fs.readFileSync).mockReturnValue(yaml.dump(config));
-        vi.mocked(fs.fstatSync).mockReturnValueOnce({ mode: 0o444 } as fs.Stats);
-        vi.mocked(fs.fchmodSync).mockImplementationOnce(() => {
-          throw Object.assign(new Error('Read-only mount'), { code: 'EROFS' });
-        });
-        expect(globalConfig.readGlobalConfig()).toEqual(config);
-        if (process.platform === 'win32') {
-          expect(fs.fchmodSync).not.toHaveBeenCalled();
-        } else {
-          expect(fs.fchmodSync).toHaveBeenCalledWith(123, 0o400);
-        }
-      });
-
-      it('should throw error if config file is invalid YAML', () => {
-        vi.mocked(fs.existsSync).mockReturnValue(true);
-        vi.mocked(fs.readFileSync).mockReturnValue('invalid: yaml: content:');
-
-        expect(() => globalConfig.readGlobalConfig()).toThrow(/bad indentation of a mapping entry/);
-      });
-    });
+    expect(fs.existsSync).toHaveBeenCalledTimes(1);
+    expect(fs.readFileSync).toHaveBeenCalledTimes(1);
+    expect(result).toEqual(config);
   });
 
-  describe('writeGlobalConfig', () => {
-    it('should write config to file in YAML format', () => {
-      globalConfig.writeGlobalConfig({
-        ...mockConfig,
-      });
+  it('creates new config if none exists', () => {
+    jest.mocked(fs.existsSync).mockReturnValue(false);
+    jest.mocked(fs.writeFileSync).mockImplementation();
 
-      expect(fs.writeFileSync).toHaveBeenCalledWith(
-        expect.stringContaining('promptfoo.yaml'),
-        expect.stringContaining('account:'),
-        expect.objectContaining({ mode: 0o600 }),
-      );
-    });
+    const result = readGlobalConfig();
+
+    expect(fs.existsSync).toHaveBeenCalledTimes(2);
+    expect(fs.writeFileSync).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({ hasRun: false });
+  });
+});
+
+describe('maybeRecordFirstRun', () => {
+  afterEach(() => {
+    resetGlobalConfig();
+    jest.clearAllMocks();
   });
 
-  describe('writeGlobalConfigPartial', () => {
-    beforeEach(() => {
-      // Setup initial config
-      vi.mocked(fs.existsSync).mockReturnValue(true);
-      vi.mocked(fs.readFileSync).mockReturnValue(
-        yaml.dump({
-          account: { email: 'old@example.com' },
-          cloud: { apiKey: 'old-key', apiHost: 'old-host' },
-        }),
-      );
-    });
+  it('returns true if it is the first run', () => {
+    jest.mocked(fs.existsSync).mockReturnValue(false);
+    jest.mocked(fs.writeFileSync).mockImplementation();
 
-    it('should merge new config with existing config', () => {
-      const partialConfig = {
-        account: { email: 'new@example.com' },
-      };
+    const result = maybeRecordFirstRun();
 
-      globalConfig.writeGlobalConfigPartial(partialConfig);
+    expect(fs.writeFileSync).toHaveBeenCalledTimes(2);
+    expect(result).toBe(true);
+  });
 
-      expect(vi.mocked(fs.writeFileSync).mock.lastCall?.[1]).toMatch(
-        /email: new@example\.com.*apiKey: old-key/s,
-      );
-    });
+  it('returns false if it is not the first run', () => {
+    const config = { hasRun: true };
+    jest.mocked(fs.existsSync).mockReturnValue(true);
+    jest.mocked(fs.readFileSync).mockReturnValue(yaml.dump(config));
 
-    it('should remove keys when value is falsy', () => {
-      const partialConfig = {
-        cloud: undefined,
-      };
+    const result = maybeRecordFirstRun();
 
-      globalConfig.writeGlobalConfigPartial(partialConfig);
-
-      expect(fs.writeFileSync).toHaveBeenCalledWith(
-        expect.stringContaining('promptfoo.yaml'),
-        expect.not.stringContaining('apiKey: old-key'),
-        expect.objectContaining({ mode: 0o600 }),
-      );
-    });
-
-    it('should update specific keys while preserving others', () => {
-      const partialConfig = {
-        cloud: { apiKey: 'new-key' },
-      };
-
-      globalConfig.writeGlobalConfigPartial(partialConfig);
-
-      const writeCall = vi.mocked(fs.writeFileSync).mock.calls[1][1] as string;
-      const writtenConfig = yaml.load(writeCall) as any;
-
-      expect(writtenConfig.cloud.apiKey).toBe('new-key');
-      expect(writtenConfig.account.email).toBe('old@example.com');
-    });
+    expect(fs.readFileSync).toHaveBeenCalledTimes(1);
+    expect(result).toBe(false);
   });
 });

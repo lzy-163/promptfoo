@@ -1,26 +1,13 @@
-import fs from 'fs/promises';
-import path from 'path';
-
-import confirm from '@inquirer/confirm';
-import { AbortPromptError, ExitPromptError } from '@inquirer/core';
-import select from '@inquirer/select';
+import checkbox from '@inquirer/checkbox';
+import rawlist from '@inquirer/rawlist';
 import chalk from 'chalk';
-import dedent from 'dedent';
-import { getEnvString } from './envars';
+import fs from 'fs';
+import path from 'path';
+import { redteamInit } from './commands/redteam';
 import logger from './logger';
-import { redteamInit } from './redteam/commands/init';
-import telemetry, { type EventProperties } from './telemetry';
-import { pathExists } from './util/file';
-import { promptfooCommand } from './util/promptfooCommand';
 import { getNunjucksEngine } from './util/templates';
 
-import type { EnvOverrides } from './types/env';
-import type { ProviderOptions } from './types/providers';
-
-const CONFIG_TEMPLATE = `# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
-
-# Learn more about building a configuration: https://promptfoo.dev/docs/configuration/guide
-
+export const CONFIG_TEMPLATE = `# Learn more about building a configuration: https://promptfoo.dev/docs/configuration/guide
 description: "My eval"
 
 prompts:
@@ -42,7 +29,7 @@ tests:
       {%- elif language == 'javascript' -%}
       context: file://context.js
       {%- else -%}
-      context: file://context.py
+      context: file://context.txt
       {%- endif %}
 
   - vars:
@@ -105,7 +92,8 @@ tests:
 {% endif %}
 `;
 
-const PYTHON_PROVIDER = `# Learn more about building a Python provider: https://promptfoo.dev/docs/providers/python/
+export const PYTHON_PROVIDER = `# Learn more about building a Python provider: https://promptfoo.dev/docs/providers/python/
+import json
 
 def call_api(prompt, options, context):
     # The 'options' parameter contains additional configuration for the API call.
@@ -118,30 +106,27 @@ def call_api(prompt, options, context):
     # The prompt is the final prompt string after the variables have been processed.
     # Custom logic to process the prompt goes here.
     # For instance, you might call an external API or run some computations.
-    # TODO: Replace with actual LLM API implementation.
-    def call_llm(prompt):
-        return f"Stub response for prompt: {prompt}"
     output = call_llm(prompt)
+
 
     # The result should be a dictionary with at least an 'output' field.
     result = {
         "output": output,
     }
 
-    # Optionally include error information:
-    # result['error'] = "An error occurred during processing"
+    if some_error_condition:
+        result['error'] = "An error occurred during processing"
 
-    # Optionally report token usage:
-    # result['tokenUsage'] = {"total": 100, "prompt": 50, "completion": 50}
-
-    # Optionally flag guardrail violations:
-    # result['guardrails'] = {"flagged": True}
+    if token_usage_calculated:
+        # If you want to report token usage, you can set the 'tokenUsage' field.
+        result['tokenUsage'] = {"total": token_count, "prompt": prompt_token_count, "completion": completion_token_count}
 
     return result
 `;
 
-const JAVASCRIPT_PROVIDER = `// Learn more about building a JavaScript provider: https://promptfoo.dev/docs/providers/custom-api
+export const JAVASCRIPT_PROVIDER = `// Learn more about building a JavaScript provider: https://promptfoo.dev/docs/providers/custom-api
 // customApiProvider.js
+import fetch from 'node-fetch';
 
 class CustomApiProvider {
   constructor(options) {
@@ -179,7 +164,7 @@ class CustomApiProvider {
 module.exports = CustomApiProvider;
 `;
 
-const BASH_PROVIDER = `# Learn more about building any generic provider: https://promptfoo.dev/docs/providers/custom-script
+export const BASH_PROVIDER = `# Learn more about building any generic provider: https://promptfoo.dev/docs/providers/custom-script
 
 # Anything printed to standard output will be captured as the output of the provider
 
@@ -189,18 +174,7 @@ echo "This is the LLM output"
 php my_script.php
 `;
 
-const WINDOWS_PROVIDER = `@echo off
-REM Learn more about building any generic provider: https://promptfoo.dev/docs/providers/custom-script
-
-REM Anything printed to standard output will be captured as the output of the provider
-
-echo This is the LLM output
-
-REM You can also call external scripts or executables
-REM php my_script.php
-`;
-
-const PYTHON_VAR = `# Learn more about using dynamic variables: https://promptfoo.dev/docs/configuration/guide/#import-vars-from-separate-files
+export const PYTHON_VAR = `# Learn more about using dynamic variables: https://promptfoo.dev/docs/configuration/guide/#import-vars-from-separate-files
 def get_var(var_name, prompt, other_vars):
     # This is where you can fetch documents from a database, call an API, etc.
     # ...
@@ -218,16 +192,14 @@ def get_var(var_name, prompt, other_vars):
     # return { 'error': 'Error message' }
 `;
 
-const JAVASCRIPT_VAR = `// Learn more about using dynamic variables: https://promptfoo.dev/docs/configuration/guide/#import-vars-from-separate-files
+export const JAVASCRIPT_VAR = `// Learn more about using dynamic variables: https://promptfoo.dev/docs/configuration/guide/#import-vars-from-separate-files
 module.exports = function (varName, prompt, otherVars) {
   // This is where you can fetch documents from a database, call an API, etc.
   // ...
 
   if (varName === 'context') {
     // Return value based on the variable name and test context
-    return {
-      output: \`... Documents for \${otherVars.inquiry} for prompt: \${prompt} ...\`
-    };
+    return \`... Documents for \${otherVars.inquiry} for prompt: \${prompt} ...\`;
   }
 
   // Default variable value
@@ -240,221 +212,65 @@ module.exports = function (varName, prompt, otherVars) {
 };
 `;
 
-function getDefaultReadme(action?: string): string {
-  const useCase =
-    action === 'rag'
-      ? 'RAG evaluation'
-      : action === 'agent'
-        ? 'agent evaluation'
-        : 'prompt evaluation';
+export const DEFAULT_README = `To get started, set your OPENAI_API_KEY environment variable, or other required keys for the providers you selected.
 
-  return `# Promptfoo ${useCase}
+Next, edit promptfooconfig.yaml.
 
-## Quick start
-
-1. Set your API key (if using a cloud provider):
-
-\`\`\`bash
-export OPENAI_API_KEY=sk-...
-# Or for other providers:
-# export ANTHROPIC_API_KEY=sk-ant-...
-# export GOOGLE_API_KEY=...
+Then run:
+\`\`\`
+promptfoo eval
 \`\`\`
 
-2. Edit \`promptfooconfig.yaml\` to customize prompts, providers, and test cases.
-
-3. Run the evaluation:
-
-\`\`\`bash
-${promptfooCommand('eval')}
-\`\`\`
-
-4. View results in your browser:
-
-\`\`\`bash
-${promptfooCommand('view')}
-\`\`\`
-
-## Learn more
-
-- Configuration guide: https://promptfoo.dev/docs/configuration/guide
-- All providers: https://promptfoo.dev/docs/providers
-- Assertions & metrics: https://promptfoo.dev/docs/configuration/expected-outputs
-- Examples: https://github.com/promptfoo/promptfoo/tree/main/examples
+Afterwards, you can view the results by running \`promptfoo view\`
 `;
-}
 
-function recordOnboardingStep(step: string, properties: EventProperties = {}) {
-  telemetry.record('funnel', {
-    type: 'eval onboarding',
-    step,
-    ...properties,
-  });
-}
-
-/**
- * Iterate through user choices and determine if the user has selected a provider that needs an API key
- * but has not set and API key in their environment.
- */
-export function reportProviderAPIKeyWarnings(
-  providerChoices: (string | ProviderOptions)[],
-): string[] {
-  const ids = providerChoices.map((c) => (typeof c === 'object' ? (c.id ?? '') : c));
-
-  const map: Record<string, keyof EnvOverrides> = {
-    openai: 'OPENAI_API_KEY',
-    anthropic: 'ANTHROPIC_API_KEY',
-    vertex: 'GOOGLE_API_KEY',
-    google: 'GOOGLE_API_KEY',
-    cohere: 'COHERE_API_KEY',
-  };
-
-  return Object.entries(map)
-    .filter(([prefix, key]) => ids.some((id) => id.startsWith(prefix)) && !getEnvString(key))
-    .map(
-      ([_prefix, key]) => dedent`
-    ${chalk.bold(`Warning: ${key} environment variable is not set.`)}
-    Please set this environment variable like: export ${key}=<my-api-key>
-  `,
-    );
-}
-
-async function askForPermissionToOverwrite({
-  absolutePath,
-  relativePath,
-  required,
-}: {
-  absolutePath: string;
-  relativePath: string;
-  required: boolean;
-}): Promise<boolean> {
-  if (!(await pathExists(absolutePath))) {
-    return true;
+export async function createDummyFiles(directory: string | null, interactive: boolean = true) {
+  if (directory) {
+    // Make the directory if it doesn't exist
+    if (!fs.existsSync(directory)) {
+      fs.mkdirSync(directory);
+    }
   }
 
-  const requiredText = required ? '(required)' : '(optional)';
-  const hasPermissionToWrite = await confirm({
-    message: `${relativePath} ${requiredText} already exists. Do you want to overwrite it?`,
-    default: false,
-  });
-
-  return hasPermissionToWrite;
-}
-
-interface InitProjectResult {
-  numPrompts: number;
-  providerPrefixes: string[];
-  action: string;
-  language: string;
-  outDirectory: string;
-}
-
-export async function createDummyFiles(
-  directory: string | null,
-  interactive: boolean = true,
-): Promise<InitProjectResult> {
-  const outDirectory = directory || '.';
-  const outDirAbsolute = path.join(process.cwd(), outDirectory);
-
-  async function writeFile({
-    file,
-    contents,
-    required,
-  }: {
-    file: string;
-    contents: string;
-    required: boolean;
-  }) {
-    const relativePath = path.join(outDirectory, file);
-    const absolutePath = path.join(outDirAbsolute, file);
-
-    if (interactive) {
-      const hasPermissionToWrite = await askForPermissionToOverwrite({
-        absolutePath,
-        relativePath,
-        required,
-      });
-
-      if (!hasPermissionToWrite) {
-        if (required) {
-          logger.warn(`⚠️ Skipping required file ${relativePath} - configuration may be incomplete`);
-        } else {
-          logger.info(`⏩ Skipping ${relativePath}`);
-        }
-        return;
-      }
+  if (directory) {
+    if (!fs.existsSync(directory)) {
+      logger.info(`Creating directory ${directory} ...`);
+      fs.mkdirSync(directory);
     }
-
-    await fs.writeFile(absolutePath, contents);
-    logger.info(`📝 Wrote ${relativePath}`);
+  } else {
+    directory = '.';
   }
 
   const prompts: string[] = [];
-  const defaultProviders = ['openai:gpt-6-luna', 'openai:gpt-6-sol'];
-  let providers: (string | ProviderOptions)[];
+  const providers: (string | object)[] = [];
   let action: string;
   let language: string;
-
-  await fs.mkdir(outDirAbsolute, { recursive: true });
-
   if (interactive) {
-    recordOnboardingStep('start');
-
-    logger.info(
-      chalk.bold('\nWelcome to Promptfoo!\n') +
-        chalk.gray("We'll set up a configuration file to get you started.\n"),
-    );
-
     // Choose use case
-    action = await select({
+    action = await rawlist({
       message: 'What would you like to do?',
       choices: [
-        {
-          name: 'Not sure yet',
-          value: 'compare',
-          description: 'Get started with a basic prompt comparison',
-        },
-        {
-          name: 'Compare prompts and models',
-          value: 'compare',
-          description: 'Test different prompts, models, or parameters side by side',
-        },
-        {
-          name: 'Improve RAG performance',
-          value: 'rag',
-          description: 'Evaluate retrieval-augmented generation pipelines',
-        },
-        {
-          name: 'Improve agent/chain of thought performance',
-          value: 'agent',
-          description: 'Test agent workflows and tool-calling behavior',
-        },
-        {
-          name: 'Run a red team evaluation',
-          value: 'redteam',
-          description: 'Scan for security vulnerabilities and compliance risks',
-        },
+        { name: 'Not sure yet', value: 'compare' },
+        { name: 'Improve prompt and model performance', value: 'compare' },
+        { name: 'Improve RAG performance', value: 'rag' },
+        { name: 'Improve agent/chain of thought performance', value: 'agent' },
+        { name: 'Run a red team evaluation', value: 'redteam' },
       ],
     });
 
-    recordOnboardingStep('choose app type', {
-      value: action,
-    });
-
     if (action === 'redteam') {
-      await redteamInit(outDirectory);
+      await redteamInit(directory || '.');
       return {
         numPrompts: 0,
         providerPrefixes: [],
         action: 'redteam',
         language: 'not_applicable',
-        outDirectory,
       };
     }
 
     language = 'not_sure';
     if (action === 'rag' || action === 'agent') {
-      language = await select({
+      language = await rawlist({
         message: 'What programming language are you developing the app in?',
         choices: [
           { name: 'Not sure yet', value: 'not_sure' },
@@ -462,23 +278,18 @@ export async function createDummyFiles(
           { name: 'Javascript', value: 'javascript' },
         ],
       });
-
-      recordOnboardingStep('choose language', {
-        value: language,
-      });
     }
 
-    const choices: { name: string; value: (string | ProviderOptions)[] }[] = [
-      { name: `I'll choose later`, value: defaultProviders },
+    const choices: { name: string; value: (string | object)[] }[] = [
+      { name: 'Choose later', value: ['openai:gpt-4o-mini', 'openai:gpt-4o'] },
       {
-        name: action === 'agent' ? '[OpenAI] GPT-6 Sol' : '[OpenAI] GPT-6 Luna and Sol',
+        name: '[OpenAI] GPT 4o, GPT 4o-mini, GPT-3.5, ...',
         value:
           action === 'agent'
             ? [
                 {
-                  id: 'openai:chat:gpt-6-sol',
+                  id: 'openai:gpt-4o',
                   config: {
-                    reasoning_effort: 'none',
                     tools: [
                       {
                         type: 'function',
@@ -501,48 +312,26 @@ export async function createDummyFiles(
                   },
                 },
               ]
-            : defaultProviders,
+            : ['openai:gpt-4o-mini', 'openai:gpt-4o'],
       },
       {
-        name: '[Anthropic] Claude Fable, Opus, Sonnet, Haiku, ...',
+        name: '[Anthropic] Claude Opus, Sonnet, Haiku, ...',
         value: [
-          'anthropic:messages:claude-fable-5-2',
-          'anthropic:messages:claude-opus-5-5',
-          'anthropic:messages:claude-opus-4-8',
-          'anthropic:messages:claude-sonnet-5-5',
-          'anthropic:messages:claude-sonnet-4-6',
-          'anthropic:messages:claude-opus-4-6',
-          'anthropic:messages:claude-haiku-4-5',
-        ],
-      },
-      {
-        name: '[Google] Gemini 4 Argon, 4 Hydrogen, 3.8 Flash, 3.7 Flash, 3.6 Flash, 3.5 Flash-Lite, ...',
-        value: [
-          ...[
-            'gemini-4-argon',
-            'gemini-4-hydrogen',
-            'gemini-3.8-flash',
-            'gemini-3.7-flash',
-            'gemini-3.6-flash',
-            'gemini-3.5-flash-lite',
-            'gemini-3.1-pro-preview',
-          ].map((id) => ({
-            id: `vertex:${id}`,
-            config: { region: 'global' },
-          })),
+          'anthropic:messages:claude-3-5-sonnet-20240620',
+          'anthropic:messages:claude-3-opus-20240307',
         ],
       },
       {
         name: '[HuggingFace] Llama, Phi, Gemma, ...',
         value: [
-          'huggingface:text-generation:meta-llama/Meta-Llama-3.1-8B-Instruct',
-          'huggingface:text-generation:microsoft/Phi-4-mini-instruct',
-          'huggingface:text-generation:google/gemma-3-4b-it',
+          'huggingface:text-generation:meta-llama/Meta-Llama-3-8B-Instruct',
+          'huggingface:text-generation:microsoft/Phi-3-mini-4k-instruct',
+          'huggingface:text-generation:google/gemma-2b-it',
         ],
       },
       {
         name: 'Local Python script',
-        value: ['file://provider.py'],
+        value: ['python:provider.py'],
       },
       {
         name: 'Local Javascript script',
@@ -550,86 +339,64 @@ export async function createDummyFiles(
       },
       {
         name: 'Local executable',
-        value: [process.platform === 'win32' ? 'exec:provider.bat' : 'exec:provider.sh'],
+        value: ['exec:provider.sh'],
       },
       {
         name: 'HTTP endpoint',
         value: ['https://example.com/api/generate'],
       },
       {
-        name: '[Azure] OpenAI, DeepSeek, Llama, ...',
-        value: [
-          {
-            id: 'azure:chat:deploymentNameHere',
-            config: {
-              apiHost: 'xxxxxxxx.openai.azure.com',
-            },
-          },
-        ],
-      },
-      {
         name: '[AWS Bedrock] Claude, Llama, Titan, ...',
-        value: ['bedrock:us.anthropic.claude-sonnet-5'],
-      },
-      {
-        name: '[Cohere] Command A+, Command A, ...',
-        value: ['cohere:command-a-plus-05-2026', 'cohere:command-a-03-2025'],
-      },
-      {
-        name: '[Ollama] Llama, Qwen, Phi, ...',
-        value: ['ollama:chat:llama3.2:3b', 'ollama:chat:phi4'],
-      },
-      {
-        name: '[WatsonX] Llama, IBM Granite, ...',
         value: [
-          'watsonx:meta-llama/llama-3-2-11b-vision-instruct',
-          'watsonx:ibm/granite-3-3-8b-instruct',
+          'bedrock:anthropic.claude-3-haiku-20240307-v1:0',
+          'bedrock:anthropic.claude-3-opus-20240307-v1:0',
         ],
+      },
+      {
+        name: '[Cohere] Command R, Command R+, ...',
+        value: ['cohere:command-r', 'cohere:command-r-plus'],
+      },
+      { name: '[Google] Gemini Pro, Gemini Ultra, ...', value: ['vertex:gemini-pro'] },
+      {
+        name: '[Ollama] Llama 3, Mixtral, ...',
+        value: ['ollama:chat:llama3', 'ollama:chat:mixtral:8x22b'],
       },
     ];
-
-    providers = await select({
-      message: 'Which model provider would you like to use?',
+    const providerChoices: (string | object)[] = await checkbox({
+      message: 'Which model providers would you like to use? (press enter to skip)',
       choices,
-      loop: false,
-      pageSize: process.stdout.rows - 6,
     });
-    recordOnboardingStep('choose providers', {
-      value: providers.map((choice) =>
-        typeof choice === 'string' ? choice : JSON.stringify(choice),
-      ),
-    });
+    if (providerChoices.length > 0) {
+      const flatProviders = providerChoices.flat();
+      if (flatProviders.length > 3) {
+        providers.push(
+          ...providerChoices.map((choice) => (Array.isArray(choice) ? choice[0] : choice)),
+        );
+      } else {
+        providers.push(...flatProviders);
+      }
 
-    // Tell the user if they have providers selected without relevant API keys set in env.
-    reportProviderAPIKeyWarnings(providers).forEach((warningText) => logger.warn(warningText));
-
-    const providerIds = providers.filter((choice) => typeof choice === 'string');
-    if (providerIds.some((id) => id.startsWith('file://') && id.endsWith('.js'))) {
-      await writeFile({
-        file: 'provider.js',
-        contents: JAVASCRIPT_PROVIDER,
-        required: true,
-      });
-    }
-    if (providerIds.some((id) => id.startsWith('exec:'))) {
-      // Generate platform-appropriate executable provider script
-      const isWindows = process.platform === 'win32';
-      await writeFile({
-        file: isWindows ? 'provider.bat' : 'provider.sh',
-        contents: isWindows ? WINDOWS_PROVIDER : BASH_PROVIDER,
-        required: true,
-      });
-    }
-    if (
-      providerIds.some(
-        (id) => id.startsWith('python:') || (id.startsWith('file://') && id.endsWith('.py')),
-      )
-    ) {
-      await writeFile({
-        file: 'provider.py',
-        contents: PYTHON_PROVIDER,
-        required: true,
-      });
+      if (
+        flatProviders.some((choice) => typeof choice === 'string' && choice.startsWith('file://'))
+      ) {
+        fs.writeFileSync(path.join(process.cwd(), directory, 'provider.js'), JAVASCRIPT_PROVIDER);
+        logger.info('⌛ Wrote provider.js');
+      }
+      if (
+        flatProviders.some((choice) => typeof choice === 'string' && choice.startsWith('exec:'))
+      ) {
+        fs.writeFileSync(path.join(process.cwd(), directory, 'provider.sh'), BASH_PROVIDER);
+        logger.info('⌛ Wrote provider.sh');
+      }
+      if (
+        flatProviders.some((choice) => typeof choice === 'string' && choice.startsWith('python:'))
+      ) {
+        fs.writeFileSync(path.join(process.cwd(), directory, 'provider.py'), PYTHON_PROVIDER);
+        logger.info('⌛ Wrote provider.py');
+      }
+    } else {
+      providers.push('openai:gpt-4o-mini');
+      providers.push('openai:gpt-4o');
     }
 
     if (action === 'compare') {
@@ -647,27 +414,20 @@ export async function createDummyFiles(
 
     if (action === 'rag' || action === 'agent') {
       if (language === 'javascript') {
-        await writeFile({
-          file: 'context.js',
-          contents: JAVASCRIPT_VAR,
-          required: true,
-        });
+        fs.writeFileSync(path.join(process.cwd(), directory, 'context.js'), JAVASCRIPT_VAR);
+        logger.info('⌛ Wrote context.js');
       } else {
-        await writeFile({
-          file: 'context.py',
-          contents: PYTHON_VAR,
-          required: true,
-        });
+        fs.writeFileSync(path.join(process.cwd(), directory, 'context.py'), PYTHON_VAR);
+        logger.info('⌛ Wrote context.py');
       }
     }
-
-    recordOnboardingStep('complete');
   } else {
     action = 'compare';
     language = 'not_sure';
     prompts.push(`Write a tweet about {{topic}}`);
     prompts.push(`Write a concise, funny tweet about {{topic}}`);
-    providers = defaultProviders;
+    providers.push('openai:gpt-4o-mini');
+    providers.push('openai:gpt-4o');
   }
 
   const nunjucks = getNunjucksEngine();
@@ -677,75 +437,32 @@ export async function createDummyFiles(
     type: action,
     language,
   });
+  fs.writeFileSync(path.join(process.cwd(), directory, 'promptfooconfig.yaml'), config);
+  fs.writeFileSync(path.join(process.cwd(), directory, 'README.md'), DEFAULT_README);
 
-  await writeFile({
-    file: 'README.md',
-    contents: getDefaultReadme(action),
-    required: false,
-  });
-
-  await writeFile({
-    file: 'promptfooconfig.yaml',
-    contents: config,
-    required: true,
-  });
+  const isNpx = process.env.npm_execpath?.includes('npx');
+  const runCommand = isNpx ? 'npx promptfoo@latest eval' : 'promptfoo eval';
+  if (directory === '.') {
+    logger.info(
+      chalk.green(
+        `✅ Wrote promptfooconfig.yaml. Run \`${chalk.bold(runCommand)}\` to get started!`,
+      ),
+    );
+  } else {
+    logger.info(`✅ Wrote promptfooconfig.yaml to ./${directory}`);
+    logger.info(
+      chalk.green(
+        `Run \`${chalk.bold(`cd ${directory}`)}\` and then \`${chalk.bold(
+          runCommand,
+        )}\` to get started!`,
+      ),
+    );
+  }
 
   return {
     numPrompts: prompts.length,
-    providerPrefixes: providers.map((provider) => {
-      const providerId = typeof provider === 'string' ? provider : provider.id;
-      return providerId?.split(':')[0] ?? 'unknown';
-    }),
+    providerPrefixes: providers.map((p) => (typeof p === 'string' ? p.split(':')[0] : 'unknown')),
     action,
     language,
-    outDirectory,
   };
-}
-
-export async function initializeProject(directory: string | null, interactive: boolean = true) {
-  try {
-    const result = await createDummyFiles(directory, interactive);
-    const { outDirectory, ...telemetryDetails } = result;
-
-    const runCommand = promptfooCommand('eval');
-    const viewCommand = promptfooCommand('view');
-
-    logger.info('');
-    if (outDirectory === '.') {
-      logger.info(chalk.green(`✅ Setup complete! Next steps:\n`));
-      logger.info(`  ${chalk.bold('1.')} Run ${chalk.cyan(runCommand)} to evaluate your prompts`);
-      logger.info(
-        `  ${chalk.bold('2.')} Run ${chalk.cyan(viewCommand)} to view results in your browser`,
-      );
-    } else {
-      logger.info(chalk.green(`✅ Wrote promptfooconfig.yaml to ./${outDirectory}\n`));
-      logger.info(`  ${chalk.bold('1.')} Run ${chalk.cyan(`cd ${outDirectory}`)}`);
-      logger.info(`  ${chalk.bold('2.')} Run ${chalk.cyan(runCommand)} to evaluate your prompts`);
-      logger.info(
-        `  ${chalk.bold('3.')} Run ${chalk.cyan(viewCommand)} to view results in your browser`,
-      );
-    }
-    logger.info('');
-    logger.info(chalk.gray(`  Docs: https://promptfoo.dev/docs/configuration/guide`));
-
-    return telemetryDetails;
-  } catch (err) {
-    if (err instanceof AbortPromptError || err instanceof ExitPromptError) {
-      const runCommand = promptfooCommand('init');
-      logger.info(
-        '\n' +
-          chalk.blue('Initialization paused. To continue setup later, use the command: ') +
-          chalk.bold(runCommand),
-      );
-      logger.info(
-        chalk.blue('For help or feedback, visit ') +
-          chalk.green('https://www.promptfoo.dev/contact/'),
-      );
-      await recordOnboardingStep('early exit');
-      process.exitCode = 130;
-      return;
-    } else {
-      throw err;
-    }
-  }
 }

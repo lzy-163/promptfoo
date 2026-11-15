@@ -1,6 +1,5 @@
 ---
 sidebar_label: Jest & Vitest
-description: Integrate LLM testing into Jest and Vitest workflows with custom matchers for semantic similarity, factuality checks, and automated prompt quality validation
 ---
 
 import Tabs from '@theme/Tabs';
@@ -12,9 +11,9 @@ import JestExampleImage from '../assets/jest-example.png';
 
 `promptfoo` can be integrated with test frameworks like [Jest](https://jestjs.io/) and [Vitest](https://vitest.dev/) to evaluate prompts as part of existing testing and CI workflows.
 
-This guide includes examples that show how to create test cases for desired prompt quality using semantic similarity and LLM grading. You can also skip to the [full example code](https://github.com/promptfoo/promptfoo/tree/main/examples/integration-jest).
+This guide includes examples that show how to create test cases for desired prompt quality using semantic similarity and LLM grading. You can also skip to the [full example code](https://github.com/promptfoo/promptfoo/tree/main/examples/jest-integration).
 
-For more information on supported checks, see the [Assertions & Metrics documentation](/docs/configuration/expected-outputs/).
+For more information on supported checks, see the [Expected Outputs documentation](/docs/configuration/expected-outputs/).
 
 ## Prerequisites
 
@@ -192,7 +191,7 @@ import { installMatchers } from './matchers';
 installMatchers();
 
 const gradingConfig = {
-  provider: 'openai:chat:gpt-5-mini',
+  provider: 'openai:chat:gpt-4o-mini',
 };
 
 describe('semantic similarity tests', () => {
